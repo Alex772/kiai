@@ -29,6 +29,10 @@ Cadastre estas variáveis na aba **Variables** do serviço Railway:
 
 Enquanto as variáveis obrigatórias não forem cadastradas, o serviço continuará de pé em modo incompleto e `/health` mostrará quais nomes estão faltando.
 
+### Observação sobre `MERCADO_PAGO_PAYER_EMAIL`
+
+Use um e-mail válido para representar o comprador quando o Discord não fornecer e-mail. Para testes, prefira um e-mail diferente do e-mail dono da conta Mercado Pago que recebe o dinheiro; se o Mercado Pago recusar, a resposta do bot agora mostra o detalhe retornado pela API.
+
 ## Webhook Mercado Pago
 
 Depois que o deploy estiver ativo, configure no Mercado Pago o webhook:

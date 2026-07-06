@@ -12,6 +12,7 @@ import {
   type ChatInputCommandInteraction
 } from 'discord.js';
 import { config, getMissingRequiredEnv } from './config.js';
+import { toUserErrorMessage } from './errors.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import { findProduct, products } from './products.js';
 import { createOrder, getOrder, updateOrder } from './store.js';
@@ -24,8 +25,8 @@ client.on(Events.Error, (error) => {
   console.error('Erro do cliente Discord:', error);
 });
 
-async function replyWithInteractionError(interaction: ChatInputCommandInteraction | ButtonInteraction) {
-  const message = 'Ocorreu um erro ao processar sua solicitação. Tente novamente em alguns minutos.';
+async function replyWithInteractionError(interaction: ChatInputCommandInteraction | ButtonInteraction, error: unknown) {
+  const message = toUserErrorMessage(error);
 
   try {
     if (interaction.deferred || interaction.replied) {
@@ -122,7 +123,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (error) {
     console.error('Erro ao processar comando slash:', error);
-    await replyWithInteractionError(interaction);
+    await replyWithInteractionError(interaction, error);
   }
 });
 
@@ -149,7 +150,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.editReply(`Pagamento ainda não aprovado. Status atual no Mercado Pago: ${status ?? 'desconhecido'}.`);
   } catch (error) {
     console.error('Erro ao processar botão de pagamento:', error);
-    await replyWithInteractionError(interaction);
+    await replyWithInteractionError(interaction, error);
   }
 });
 
