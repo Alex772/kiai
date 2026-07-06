@@ -22,5 +22,6 @@ export const config = {
   mercadoPagoWebhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
   publicBaseUrl: process.env.PUBLIC_BASE_URL,
   currency: process.env.STORE_CURRENCY ?? 'BRL',
-  adminRoleId: process.env.ADMIN_ROLE_ID
+  adminRoleId: process.env.ADMIN_ROLE_ID,
+  autoRegisterCommands: process.env.AUTO_REGISTER_COMMANDS !== 'false'
 };

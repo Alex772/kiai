@@ -12,6 +12,7 @@ import { config, getMissingRequiredEnv } from './config.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import { findProduct, products } from './products.js';
 import { createOrder, getOrder, updateOrder } from './store.js';
+import { registerSlashCommands } from './registerSlashCommands.js';
 import { startHttpServer } from './server.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -132,5 +133,14 @@ if (missingEnv.length > 0) {
     `Bot iniciado em modo de configuração incompleta. Defina as variáveis no Railway: ${missingEnv.join(', ')}`
   );
 } else {
+  if (config.autoRegisterCommands) {
+    try {
+      const result = await registerSlashCommands();
+      console.log(`Registrados ${result.count} comandos slash automaticamente no escopo ${result.scope}.`);
+    } catch (error) {
+      console.error('Falha ao registrar comandos slash automaticamente:', error);
+    }
+  }
+
   await client.login(config.discordToken);
 }

@@ -24,6 +24,7 @@ Cadastre estas variáveis na aba **Variables** do serviço Railway:
 | `STORE_CURRENCY` | Use `BRL` | Opcional |
 | `ADMIN_ROLE_ID` | ID do cargo admin no Discord | Opcional |
 | `MERCADO_PAGO_WEBHOOK_SECRET` | Configuração futura de assinatura de webhook | Opcional |
+| `AUTO_REGISTER_COMMANDS` | Use `true` para registrar slash commands ao iniciar | Opcional, padrão `true` |
 
 Enquanto as variáveis obrigatórias não forem cadastradas, o serviço continuará de pé em modo incompleto e `/health` mostrará quais nomes estão faltando.
 
@@ -36,3 +37,9 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 ```
 
 Substitua `seu-projeto.up.railway.app` pela URL pública real do seu serviço Railway.
+
+## Slash commands no Discord
+
+O bot registra os comandos automaticamente quando inicia, desde que `AUTO_REGISTER_COMMANDS` não esteja como `false`. Para aparecer rápido, configure `DISCORD_GUILD_ID` com o ID do seu servidor. Comandos globais, sem `DISCORD_GUILD_ID`, podem levar mais tempo para aparecer no cliente Discord.
+
+Ao convidar o bot, marque os escopos `bot` e `applications.commands`; sem `applications.commands`, os comandos slash não aparecem mesmo com o bot online.

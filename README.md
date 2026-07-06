@@ -9,6 +9,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/pedido`: consulta o status de um pedido em memória.
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago e envia DM quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
+- Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
 
 > Atenção: esta versão inicial mantém pedidos em memória. Para produção, adicione PostgreSQL/Redis no Railway para não perder pedidos ao reiniciar o deploy.
 >
@@ -23,7 +24,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 npm install
 ```
 
-3. Registre os comandos no Discord:
+3. Os comandos slash são registrados automaticamente ao iniciar. Se quiser registrar manualmente, execute:
 
 ```bash
 npm run register:commands
@@ -53,3 +54,9 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 ## Personalizando produtos
 
 Edite `src/products.ts` para alterar IDs, nomes, descrições, preços e mensagens de entrega.
+
+## Comandos slash não aparecem
+
+- Confirme que o bot foi convidado com o escopo `applications.commands` além de `bot`.
+- Para comandos aparecerem imediatamente, preencha `DISCORD_GUILD_ID` com o ID do seu servidor. Sem `DISCORD_GUILD_ID`, os comandos são globais e podem demorar para aparecer no Discord.
+- Deixe `AUTO_REGISTER_COMMANDS=true` no Railway, ou execute `npm run register:commands` após configurar as variáveis.
