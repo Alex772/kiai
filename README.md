@@ -37,8 +37,10 @@ npm run dev
 
 ## Deploy no Railway
 
+O arquivo `railway.json` já define build, start, healthcheck e política de restart para o Railway. Se você não conseguir criar arquivos pelo painel, basta manter este arquivo no repositório e cadastrar as variáveis pela aba **Variables**. Veja também `docs/RAILWAY.md`.
+
 1. Crie um projeto no Railway conectado a este repositório.
-2. Configure as variáveis de ambiente listadas em `.env.example`.
+2. Configure as variáveis de ambiente listadas em `.env.railway.example`.
 3. Defina `PUBLIC_BASE_URL` com a URL pública do serviço Railway.
 4. Configure no painel do Mercado Pago o webhook apontando para:
 

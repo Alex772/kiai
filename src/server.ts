@@ -24,7 +24,10 @@ function readJsonBody(request: IncomingMessage) {
   });
 }
 
-export function startHttpServer(client: Client, getRuntimeStatus: () => RuntimeStatus) {
+export function startHttpServer(
+  client: Client,
+  getRuntimeStatus: () => RuntimeStatus = () => ({ discordReady: client.isReady(), missingEnv: [] })
+) {
   const server = createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       const status = getRuntimeStatus();

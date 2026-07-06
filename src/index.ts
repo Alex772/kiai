@@ -9,7 +9,6 @@ import {
   GatewayIntentBits
 } from 'discord.js';
 import { config, getMissingRequiredEnv } from './config.js';
-import { config } from './config.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import { findProduct, products } from './products.js';
 import { createOrder, getOrder, updateOrder } from './store.js';
@@ -19,7 +18,6 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot conectado como ${readyClient.user.tag}`);
-  startHttpServer(client);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
