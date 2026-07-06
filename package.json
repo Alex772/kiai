@@ -1,0 +1,29 @@
+{
+  "name": "kiai-discord-shop-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bot Discord para loja com pagamentos PIX via Mercado Pago, pronto para Railway.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "register:commands": "tsx src/registerCommands.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "discord-api-types": "^0.37.120",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "mercadopago": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
