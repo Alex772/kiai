@@ -20,6 +20,7 @@ export const config = {
   discordGuildId: process.env.DISCORD_GUILD_ID,
   mercadoPagoAccessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN ?? '',
   mercadoPagoWebhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
+  mercadoPagoPayerEmail: process.env.MERCADO_PAGO_PAYER_EMAIL,
   publicBaseUrl: process.env.PUBLIC_BASE_URL,
   currency: process.env.STORE_CURRENCY ?? 'BRL',
   adminRoleId: process.env.ADMIN_ROLE_ID,

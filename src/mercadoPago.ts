@@ -28,7 +28,7 @@ export async function createPixPayment(order: Order) {
       external_reference: order.id,
       notification_url: notificationUrl,
       payer: {
-        email: `${order.userId}@discord.local`,
+        email: config.mercadoPagoPayerEmail ?? `comprador-${order.userId}@example.com`,
         first_name: 'Cliente',
         last_name: 'Discord'
       }

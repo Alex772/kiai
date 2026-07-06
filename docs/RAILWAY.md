@@ -19,6 +19,7 @@ Cadastre estas variáveis na aba **Variables** do serviço Railway:
 | `DISCORD_TOKEN` | Discord Developer Portal > Bot > Token | Sim |
 | `DISCORD_CLIENT_ID` | Discord Developer Portal > General Information > Application ID | Sim |
 | `MERCADO_PAGO_ACCESS_TOKEN` | Mercado Pago Developers > Credenciais de produção | Sim |
+| `MERCADO_PAGO_PAYER_EMAIL` | E-mail padrão válido para gerar PIX quando o Discord não informa e-mail | Recomendado |
 | `PUBLIC_BASE_URL` | URL pública do serviço no Railway | Recomendado para webhooks |
 | `DISCORD_GUILD_ID` | ID do servidor Discord | Opcional, mas recomendado para testar comandos rapidamente |
 | `STORE_CURRENCY` | Use `BRL` | Opcional |

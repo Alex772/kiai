@@ -10,6 +10,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago e envia DM quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
+- Tratamento de erro nas interações para o Discord não ficar preso em “pensando...” se o Mercado Pago recusar a requisição.
 
 > Atenção: esta versão inicial mantém pedidos em memória. Para produção, adicione PostgreSQL/Redis no Railway para não perder pedidos ao reiniciar o deploy.
 >
