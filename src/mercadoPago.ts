@@ -26,10 +26,26 @@ function resolvePayerEmail(userId: string) {
   return email;
 }
 
+function resolveNotificationUrl() {
+  if (!config.publicBaseUrl) return undefined;
+
+  let baseUrl: URL;
+
+  try {
+    baseUrl = new URL(config.publicBaseUrl);
+  } catch {
+    throw new Error(`PUBLIC_BASE_URL inválida: ${config.publicBaseUrl}`);
+  }
+
+  if (baseUrl.protocol !== 'https:') {
+    throw new Error('PUBLIC_BASE_URL precisa começar com https://. O Mercado Pago recusa webhooks HTTP ao criar PIX.');
+  }
+
+  return `${baseUrl.origin}/webhooks/mercado-pago`;
+}
+
 export async function createPixPayment(order: Order) {
-  const notificationUrl = config.publicBaseUrl
-    ? `${config.publicBaseUrl.replace(/\/$/, '')}/webhooks/mercado-pago`
-    : undefined;
+  const notificationUrl = resolveNotificationUrl();
 
   try {
     const response = (await paymentClient.create({

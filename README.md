@@ -59,7 +59,7 @@ Edite `src/products.ts` para alterar IDs, nomes, descrições, preços e mensage
 
 ## Erros ao gerar PIX
 
-Se `/comprar` responder com erro do Mercado Pago, confira `MERCADO_PAGO_ACCESS_TOKEN` e `MERCADO_PAGO_PAYER_EMAIL`. O e-mail do pagador precisa ser válido; para testes, use preferencialmente um e-mail diferente do e-mail da conta Mercado Pago que recebe o pagamento.
+Se `/comprar` responder com erro do Mercado Pago, confira `MERCADO_PAGO_ACCESS_TOKEN`, `MERCADO_PAGO_PAYER_EMAIL` e `PUBLIC_BASE_URL`. O e-mail do pagador precisa ser válido; para testes, use preferencialmente um e-mail diferente do e-mail da conta Mercado Pago que recebe o pagamento. Se aparecer `http is unavailable for request create_ti`, ajuste `PUBLIC_BASE_URL` para a URL pública HTTPS do Railway, começando com `https://`.
 
 ## Comandos slash não aparecem
 
