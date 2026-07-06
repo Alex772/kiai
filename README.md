@@ -11,6 +11,8 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - Healthcheck `GET /health` para Railway.
 
 > Atenção: esta versão inicial mantém pedidos em memória. Para produção, adicione PostgreSQL/Redis no Railway para não perder pedidos ao reiniciar o deploy.
+>
+> Se as variáveis obrigatórias ainda não estiverem configuradas, o processo não derruba o Railway: ele sobe apenas o servidor HTTP, mostra as variáveis faltantes em `/health` e só conecta o bot ao Discord quando `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` e `MERCADO_PAGO_ACCESS_TOKEN` existirem.
 
 ## Configuração local
 

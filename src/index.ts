@@ -8,6 +8,7 @@ import {
   Events,
   GatewayIntentBits
 } from 'discord.js';
+import { config, getMissingRequiredEnv } from './config.js';
 import { config } from './config.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import { findProduct, products } from './products.js';
@@ -121,4 +122,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   await interaction.editReply(`Pagamento ainda não aprovado. Status atual no Mercado Pago: ${status ?? 'desconhecido'}.`);
 });
 
-await client.login(config.discordToken);
+startHttpServer(client, () => ({
+  discordReady: client.isReady(),
+  missingEnv: getMissingRequiredEnv()
+}));
+
+const missingEnv = getMissingRequiredEnv();
+
+if (missingEnv.length > 0) {
+  console.error(
+    `Bot iniciado em modo de configuração incompleta. Defina as variáveis no Railway: ${missingEnv.join(', ')}`
+  );
+} else {
+  await client.login(config.discordToken);
+}
