@@ -31,5 +31,16 @@ export const products: Product[] = [
 ];
 
 export function findProduct(productId: string): Product | undefined {
-  return products.find((product) => product.id === productId);
+  return products.find((p) => p.id === productId);
+}
+
+export function addProduct(product: Product): void {
+  products.push(product);
+}
+
+export function removeProduct(productId: string): boolean {
+  const index = products.findIndex((p) => p.id === productId);
+  if (index === -1) return false;
+  products.splice(index, 1);
+  return true;
 }
