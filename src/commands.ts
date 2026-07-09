@@ -1,17 +1,10 @@
 import { SlashCommandBuilder } from 'discord.js';
 
 export const commands = [
-  new SlashCommandBuilder().setName('loja').setDescription('Mostra os produtos disponíveis na loja.'),
   new SlashCommandBuilder()
-    .setName('comprar')
-    .setDescription('Gera um pagamento PIX para comprar um produto.')
-    .addStringOption((option) =>
-      option.setName('produto').setDescription('Produto que você deseja comprar').setRequired(true).setAutocomplete(true)
-    ),
-  new SlashCommandBuilder()
-    .setName('pedido')
-    .setDescription('Consulta o status de um pedido.')
-    .addStringOption((option) => option.setName('id').setDescription('ID do pedido').setRequired(true)),
+    .setName('loja')
+    .setDescription('Abre a loja interativa usando Components V2.'),
+
   new SlashCommandBuilder()
     .setName('addproduto')
     .setDescription('Adiciona um produto à loja. (Apenas dono do servidor)')
@@ -20,6 +13,7 @@ export const commands = [
     .addNumberOption((o) => o.setName('preco').setDescription('Preço em R$').setRequired(true))
     .addStringOption((o) => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
     .addStringOption((o) => o.setName('entrega').setDescription('Mensagem enviada após pagamento aprovado').setRequired(true)),
+
   new SlashCommandBuilder()
     .setName('removerproduto')
     .setDescription('Remove um produto da loja. (Apenas dono do servidor)')
