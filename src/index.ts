@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   Client,
   Events,
   GatewayIntentBits,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
   MessageFlags,
   SeparatorBuilder,
   SeparatorSpacingSize,
@@ -86,6 +89,49 @@ async function buildPixOrder(userId: string, product: Product) {
     qrCodeBase64: pix.qrCodeBase64
   });
   return { order: updated ?? order, pix };
+}
+
+function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64?: string }) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## 💸 Pagamento PIX — ${order.product.name}`)
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${order.product.price.toFixed(2)}\n\nEscaneie o QR Code abaixo pelo app do seu banco ou copie o código PIX. O bot avisará por DM quando o pagamento for aprovado.`
+    )
+  );
+
+  const files: AttachmentBuilder[] = [];
+
+  if (pix.qrCodeBase64) {
+    const attachment = new AttachmentBuilder(Buffer.from(pix.qrCodeBase64, 'base64'), { name: 'pix-qrcode.png' });
+    files.push(attachment);
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder().setURL('attachment://pix-qrcode.png').setDescription('QR Code do pagamento PIX')
+      )
+    );
+  }
+
+  if (pix.qrCode) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**PIX copia e cola:**\n\`\`\`\n${pix.qrCode}\n\`\`\``)
+    );
+  }
+
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
+    )
+  );
+
+  return {
+    components: [container],
+    files,
+    flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2
+  };
 }
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -183,26 +229,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const container = new ContainerBuilder();
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`## 💸 Pagamento PIX — ${product.name}`)
-      );
-      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${product.price.toFixed(2)}\n\nCopie o código PIX abaixo no app do seu banco. O bot avisará por DM quando o pagamento for aprovado.`
-        )
-      );
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`**PIX copia e cola:**\n\`\`\`\n${pix.qrCode}\n\`\`\``)
-      );
-      container.addActionRowComponents(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
-        )
-      );
-
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      await interaction.editReply(buildPixPaymentReply(order, pix));
       return;
     }
 
@@ -393,26 +420,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const container = new ContainerBuilder();
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`## 💸 Pagamento PIX — ${product.name}`)
-      );
-      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${product.price.toFixed(2)}\n\nCopie o código PIX abaixo no app do seu banco. O bot avisará por DM quando o pagamento for aprovado.`
-        )
-      );
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`**PIX copia e cola:**\n\`\`\`\n${pix.qrCode}\n\`\`\``)
-      );
-      container.addActionRowComponents(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
-        )
-      );
-
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      await interaction.editReply(buildPixPaymentReply(order, pix));
       return;
     }
 
