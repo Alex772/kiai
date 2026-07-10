@@ -4,11 +4,14 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 
 ## Funcionalidades
 
-- `/loja`: lista produtos (do banco de dados) com botão "Comprar" em cada um.
-- `/comprar`: cria um pedido e gera PIX copia-e-cola pelo Mercado Pago.
+- `/loja`: mostra os produtos com paginação (botões Anterior/Próxima e um botão "Página X/Y" que abre um campo pra digitar a página desejada) e botão "Comprar" em cada um.
+- `/comprar`: cria um pedido e gera PIX (código copia-e-cola + imagem do QR Code) pelo Mercado Pago.
 - `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, datas).
 - `/pedidos`: lista os últimos pedidos do usuário.
-- `/addproduto`, `/editarproduto`, `/removerproduto`: gerenciam o catálogo (apenas dono do servidor ou cargo em `ADMIN_ROLE_ID`).
+- `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; opcionalmente você escolhe a posição na lista).
+- `/editarproduto`: mostra a lista de produtos num menu — ao escolher um, abre um formulário (modal) já preenchido com nome, preço, descrição, mensagem de entrega e posição atuais, prontos pra editar.
+- `/removerproduto`: remove um produto da loja (os produtos seguintes reordenam automaticamente pra fechar o espaço).
+- `/lojaconfig`: configura título, descrição e quantidade de itens por página da loja. Sem argumentos, mostra a configuração atual.
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago e envia DM quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
@@ -18,12 +21,16 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 
 ## Banco de dados (PostgreSQL no Railway)
 
-Produtos e pedidos agora são persistidos em PostgreSQL (antes ficavam em memória e se perdiam a cada redeploy).
+Produtos e pedidos são persistidos em PostgreSQL.
 
 1. No Railway, adicione o serviço **Postgres** ao projeto (se ainda não tiver).
-2. No serviço do **bot**, adicione a variável `DATABASE_URL` referenciando a `DATABASE_URL` do serviço Postgres (Railway permite usar `${{Postgres.DATABASE_URL}}` como referência entre serviços, ou copiar o valor direto da aba Variables do Postgres). Use a URL **privada** (`*.railway.internal`), não a pública — é mais rápida e não conta como egress.
+2. No serviço do **bot**, adicione a variável `DATABASE_URL` referenciando a `DATABASE_URL` do serviço Postgres (Railway permite usar `${{Postgres.DATABASE_URL}}` como referência entre serviços, ou copiar o valor direto da aba Variables do Postgres). Use a URL **privada** (`*.railway.internal`), não a pública — é mais rápida e não conta como egress. Cole o valor **sem aspas**.
 3. Para rodar localmente (fora do Railway), use a `DATABASE_PUBLIC_URL` do Postgres (proxy `*.proxy.rlwy.net`) na variável `DATABASE_PUBLIC_URL` do seu `.env`.
-4. Não é preciso criar tabelas manualmente: ao iniciar, o bot roda uma migração automática (`CREATE TABLE IF NOT EXISTS ...`) e, se a tabela `products` estiver vazia, insere 3 produtos de exemplo (`vip_bronze`, `vip_prata`, `vip_ouro`).
+4. Não é preciso criar tabelas manualmente: ao iniciar, o bot roda uma migração automática (`CREATE TABLE IF NOT EXISTS ...`) e, se a tabela `products` estiver vazia, insere 3 produtos de exemplo (VIP Bronze, VIP Prata, VIP Ouro). Se você já tinha produtos de uma versão anterior (com ID em texto), a migração converte automaticamente para ID numérico + posição na primeira execução, sem perder os dados.
+
+## Posição/ordem dos produtos
+
+Cada produto tem uma posição (1 = primeiro na loja). Ao adicionar um produto numa posição já ocupada, os demais avançam uma posição automaticamente para abrir espaço. Ao editar a posição de um produto existente, os produtos entre a posição antiga e a nova são reordenados sozinhos — sem posições duplicadas ou espaços vazios. Ao remover um produto, os que vinham depois recuam uma posição.
 
 ## Configuração local
 

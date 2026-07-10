@@ -10,9 +10,14 @@ import {
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
   MessageFlags,
+  ModalBuilder,
   SeparatorBuilder,
   SeparatorSpacingSize,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   TextDisplayBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   ContainerBuilder,
   type AutocompleteInteraction,
   type ButtonInteraction,
@@ -20,8 +25,10 @@ import {
 } from 'discord.js';
 import { config, getMissingRequiredEnv } from './config.js';
 import { toUserErrorMessage } from './errors.js';
+import { formatPrice, parsePrice } from './format.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
-import { addProduct, editProduct, findProduct, listProducts, removeProduct, type Product } from './products.js';
+import { addProduct, countProducts, editProduct, findProduct, listProducts, removeProduct, type Product } from './products.js';
+import { getStoreSettings, updateStoreSettings } from './settings.js';
 import { createOrder, getOrder, listOrdersByUser, updateOrder, type Order } from './store.js';
 import { registerSlashCommands } from './registerSlashCommands.js';
 import { startHttpServer } from './server.js';
@@ -70,7 +77,7 @@ function orderDetailContent(order: Order) {
     `## 📦 Pedido`,
     `**ID:** \`${order.id}\``,
     `**Produto:** ${order.product.name}`,
-    `**Valor:** R$ ${order.product.price.toFixed(2)}`,
+    `**Valor:** R$ ${formatPrice(order.product.price)}`,
     `**Status:** ${STATUS_LABEL[order.status]}`,
     order.paymentId ? `**ID do pagamento (Mercado Pago):** \`${order.paymentId}\`` : undefined,
     `**Criado em:** ${formatDate(order.createdAt)}`,
@@ -99,7 +106,7 @@ function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${order.product.price.toFixed(2)}\n\nEscaneie o QR Code abaixo pelo app do seu banco ou copie o código PIX. O bot avisará por DM quando o pagamento for aprovado.`
+      `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\nEscaneie o QR Code abaixo pelo app do seu banco ou copie o código PIX. O bot avisará por DM quando o pagamento for aprovado.`
     )
   );
 
@@ -134,6 +141,45 @@ function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64
   };
 }
 
+async function buildLojaReply(requestedPage: number) {
+  const [products, settings] = await Promise.all([listProducts(), getStoreSettings()]);
+  const perPage = Math.max(1, settings.itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(products.length / perPage));
+  const page = Math.min(Math.max(requestedPage, 1), totalPages);
+  const start = (page - 1) * perPage;
+  const pageProducts = products.slice(start, start + perPage);
+
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${settings.title}\n${settings.description}`));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+
+  if (pageProducts.length === 0) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent('Nenhum produto disponível no momento.'));
+  } else {
+    for (const product of pageProducts) {
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`### ${product.name} — R$ ${formatPrice(product.price)}\n${product.description}`)
+      );
+      container.addActionRowComponents(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`comprar:${product.id}`).setLabel(`Comprar ${product.name}`).setStyle(ButtonStyle.Primary)
+        )
+      );
+    }
+  }
+
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`loja:page:${page - 1}`).setLabel('◀ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
+      new ButtonBuilder().setCustomId('loja:jump').setLabel(`Página ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(totalPages <= 1),
+      new ButtonBuilder().setCustomId(`loja:page:${page + 1}`).setLabel('Próxima ▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
+    )
+  );
+
+  return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot conectado como ${readyClient.user.tag}`);
 });
@@ -146,12 +192,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const autocomplete = interaction as AutocompleteInteraction;
     const focused = autocomplete.options.getFocused().toLowerCase();
 
-    if (['comprar', 'removerproduto', 'editarproduto'].includes(autocomplete.commandName)) {
+    if (['comprar', 'removerproduto'].includes(autocomplete.commandName)) {
       const products = await listProducts();
       const choices = products
-        .filter((p) => p.name.toLowerCase().includes(focused) || p.id.toLowerCase().includes(focused))
+        .filter((p) => p.name.toLowerCase().includes(focused) || String(p.id).includes(focused))
         .slice(0, 25)
-        .map((p) => ({ name: `${p.name} — R$ ${p.price.toFixed(2)}`, value: p.id }));
+        .map((p) => ({ name: `${p.name} — R$ ${formatPrice(p.price)}`, value: String(p.id) }));
 
       await autocomplete.respond(choices);
       return;
@@ -181,32 +227,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // /loja
     if (interaction.commandName === 'loja') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const products = await listProducts();
-
-      const container = new ContainerBuilder();
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent('## 🛒 Loja\nUse `/comprar` ou clique em um botão abaixo para gerar um PIX pelo Mercado Pago.')
-      );
-      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
-
-      if (products.length === 0) {
-        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('Nenhum produto disponível no momento.'));
-      } else {
-        for (const product of products) {
-          container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              `### ${product.name} — R$ ${product.price.toFixed(2)}\n${product.description}`
-            )
-          );
-          container.addActionRowComponents(
-            new ActionRowBuilder<ButtonBuilder>().addComponents(
-              new ButtonBuilder().setCustomId(`comprar:${product.id}`).setLabel(`Comprar ${product.name}`).setStyle(ButtonStyle.Primary)
-            )
-          );
-        }
-      }
-
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      await interaction.editReply(await buildLojaReply(1));
       return;
     }
 
@@ -214,7 +235,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'comprar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const productId = interaction.options.getString('produto', true);
+      const productId = Number(interaction.options.getString('produto', true));
       const product = await findProduct(productId);
 
       if (!product) {
@@ -274,7 +295,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const order of orders) {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `**${order.product.name}** — R$ ${order.product.price.toFixed(2)} — ${STATUS_LABEL[order.status]}\n\`${order.id}\` • ${formatDate(order.createdAt)}`
+              `**${order.product.name}** — R$ ${formatPrice(order.product.price)} — ${STATUS_LABEL[order.status]}\n\`${order.id}\` • ${formatDate(order.createdAt)}`
             )
           );
         }
@@ -293,28 +314,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const id = interaction.options.getString('id', true).trim().replace(/\s+/g, '_');
       const name = interaction.options.getString('nome', true);
-      const price = interaction.options.getNumber('preco', true);
+      const priceRaw = interaction.options.getString('preco', true);
       const description = interaction.options.getString('descricao', true);
       const deliveryMessage = interaction.options.getString('entrega', true);
+      const position = interaction.options.getInteger('posicao') ?? undefined;
 
-      if (price <= 0) {
-        await interaction.editReply('O preço precisa ser maior que zero.');
+      const price = parsePrice(priceRaw);
+
+      if (price === undefined || price <= 0) {
+        await interaction.editReply('Preço inválido. Use um valor como `9,90`.');
         return;
       }
 
-      if (await findProduct(id)) {
-        await interaction.editReply(`Já existe um produto com o ID \`${id}\`.`);
-        return;
-      }
-
-      await addProduct({ id, name, price, description, deliveryMessage });
+      const product = await addProduct({ name, description, price, deliveryMessage, position });
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `## ✅ Produto adicionado\n**ID:** \`${id}\`\n**Nome:** ${name}\n**Preço:** R$ ${price.toFixed(2)}\n**Descrição:** ${description}`
+          `## ✅ Produto adicionado\n**ID:** \`${product.id}\`\n**Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Descrição:** ${product.description}`
         )
       );
 
@@ -322,7 +340,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // /editarproduto
+    // /editarproduto — mostra a lista de produtos com um menu para escolher qual editar
     if (interaction.commandName === 'editarproduto') {
       if (!isGuildOwner(interaction)) {
         await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
@@ -331,35 +349,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const productId = interaction.options.getString('produto', true);
-      const name = interaction.options.getString('nome') ?? undefined;
-      const price = interaction.options.getNumber('preco') ?? undefined;
-      const description = interaction.options.getString('descricao') ?? undefined;
-      const deliveryMessage = interaction.options.getString('entrega') ?? undefined;
+      const products = await listProducts();
 
-      if (!name && price === undefined && !description && !deliveryMessage) {
-        await interaction.editReply('Informe ao menos um campo para editar (nome, preco, descricao ou entrega).');
-        return;
-      }
-
-      if (price !== undefined && price <= 0) {
-        await interaction.editReply('O preço precisa ser maior que zero.');
-        return;
-      }
-
-      const updated = await editProduct(productId, { name, price, description, deliveryMessage });
-
-      if (!updated) {
-        await interaction.editReply('Produto não encontrado.');
+      if (products.length === 0) {
+        await interaction.editReply('Não há produtos cadastrados ainda. Use `/addproduto` primeiro.');
         return;
       }
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          `## ✏️ Produto atualizado\n**ID:** \`${updated.id}\`\n**Nome:** ${updated.name}\n**Preço:** R$ ${updated.price.toFixed(2)}\n**Descrição:** ${updated.description}`
-        )
+        new TextDisplayBuilder().setContent('## ✏️ Editar produto\nEscolha um produto abaixo para ver e editar todos os dados dele.')
       );
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+
+      const select = new StringSelectMenuBuilder()
+        .setCustomId('editarproduto:select')
+        .setPlaceholder('Selecione um produto')
+        .addOptions(
+          products.slice(0, 25).map((p) =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(`${p.position}. ${p.name}`.slice(0, 100))
+              .setDescription(`R$ ${formatPrice(p.price)}`.slice(0, 100))
+              .setValue(String(p.id))
+          )
+        );
+
+      container.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select));
 
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       return;
@@ -374,7 +389,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const productId = interaction.options.getString('produto', true);
+      const productId = Number(interaction.options.getString('produto', true));
       const product = await findProduct(productId);
 
       if (!product) {
@@ -392,20 +407,220 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       return;
     }
+
+    // /lojaconfig
+    if (interaction.commandName === 'lojaconfig') {
+      if (!isGuildOwner(interaction)) {
+        await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const itemsPerPage = interaction.options.getInteger('itens_por_pagina') ?? undefined;
+      const title = interaction.options.getString('titulo') ?? undefined;
+      const description = interaction.options.getString('descricao') ?? undefined;
+
+      if (itemsPerPage === undefined && title === undefined && description === undefined) {
+        const current = await getStoreSettings();
+        await interaction.editReply(
+          `## ⚙️ Configuração atual da loja\n**Itens por página:** ${current.itemsPerPage}\n**Título:** ${current.title}\n**Descrição:** ${current.description}`
+        );
+        return;
+      }
+
+      const updated = await updateStoreSettings({ itemsPerPage, title, description });
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## ✅ Configuração da loja atualizada\n**Itens por página:** ${updated.itemsPerPage}\n**Título:** ${updated.title}\n**Descrição:** ${updated.description}`
+        )
+      );
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
   } catch (error) {
     console.error('Erro ao processar comando slash:', error);
     await replyError(interaction, error);
   }
 });
 
-// Botões: comprar direto da /loja e verificar pagamento
+// Menus de seleção (StringSelectMenu)
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  try {
+    if (interaction.customId === 'editarproduto:select') {
+      const productId = Number(interaction.values[0]);
+      const product = await findProduct(productId);
+
+      if (!product) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const total = await countProducts();
+
+      const modal = new ModalBuilder()
+        .setCustomId(`editarproduto:modal:${productId}`)
+        .setTitle(`Editar: ${product.name}`.slice(0, 45));
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('nome')
+            .setLabel('Nome')
+            .setStyle(TextInputStyle.Short)
+            .setValue(product.name)
+            .setRequired(true)
+            .setMaxLength(100)
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('preco')
+            .setLabel('Preço (ex: 9,90)')
+            .setStyle(TextInputStyle.Short)
+            .setValue(formatPrice(product.price))
+            .setRequired(true)
+            .setMaxLength(20)
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('descricao')
+            .setLabel('Descrição')
+            .setStyle(TextInputStyle.Paragraph)
+            .setValue(product.description)
+            .setRequired(true)
+            .setMaxLength(500)
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('entrega')
+            .setLabel('Mensagem de entrega')
+            .setStyle(TextInputStyle.Paragraph)
+            .setValue(product.deliveryMessage)
+            .setRequired(true)
+            .setMaxLength(1000)
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('posicao')
+            .setLabel(`Posição (1 a ${total})`)
+            .setStyle(TextInputStyle.Short)
+            .setValue(String(product.position ?? 1))
+            .setRequired(true)
+            .setMaxLength(5)
+        )
+      );
+
+      await interaction.showModal(modal);
+    }
+  } catch (error) {
+    console.error('Erro ao processar menu de seleção:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
+    }
+  }
+});
+
+// Modais
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+
+  try {
+    if (interaction.customId.startsWith('editarproduto:modal:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const name = interaction.fields.getTextInputValue('nome').trim();
+      const priceRaw = interaction.fields.getTextInputValue('preco').trim();
+      const description = interaction.fields.getTextInputValue('descricao').trim();
+      const deliveryMessage = interaction.fields.getTextInputValue('entrega').trim();
+      const positionRaw = interaction.fields.getTextInputValue('posicao').trim();
+
+      const price = parsePrice(priceRaw);
+      if (price === undefined || price <= 0) {
+        await interaction.editReply('Preço inválido. Use um valor como `9,90`.');
+        return;
+      }
+
+      const position = Number(positionRaw);
+      if (!Number.isInteger(position) || position < 1) {
+        await interaction.editReply('Posição inválida. Use um número inteiro a partir de 1.');
+        return;
+      }
+
+      const updated = await editProduct(productId, { name, price, description, deliveryMessage, position });
+
+      if (!updated) {
+        await interaction.editReply('Produto não encontrado (pode ter sido removido).');
+        return;
+      }
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## ✅ Produto atualizado\n**Posição:** ${updated.position}\n**Nome:** ${updated.name}\n**Preço:** R$ ${formatPrice(updated.price)}\n**Descrição:** ${updated.description}`
+        )
+      );
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    if (interaction.customId === 'loja:jumpmodal') {
+      const raw = interaction.fields.getTextInputValue('pagina').trim();
+      const page = Number(raw);
+      const targetPage = Number.isInteger(page) && page > 0 ? page : 1;
+
+      if (interaction.isFromMessage()) {
+        await interaction.update(await buildLojaReply(targetPage));
+      } else {
+        await interaction.reply({ content: 'Não foi possível atualizar a página.', flags: MessageFlags.Ephemeral });
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao processar modal:', error);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content: toUserErrorMessage(error), components: [] });
+    } else if (!interaction.replied) {
+      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
+    }
+  }
+});
+
+// Botões: navegação da loja, comprar direto da /loja e verificar pagamento
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
   try {
+    if (interaction.customId.startsWith('loja:page:')) {
+      const targetPage = Number(interaction.customId.split(':')[2]);
+      await interaction.update(await buildLojaReply(targetPage));
+      return;
+    }
+
+    if (interaction.customId === 'loja:jump') {
+      const modal = new ModalBuilder().setCustomId('loja:jumpmodal').setTitle('Ir para página');
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('pagina')
+            .setLabel('Número da página')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(5)
+        )
+      );
+      await interaction.showModal(modal);
+      return;
+    }
+
     if (interaction.customId.startsWith('comprar:')) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const productId = interaction.customId.replace('comprar:', '');
+      const productId = Number(interaction.customId.replace('comprar:', ''));
       const product = await findProduct(productId);
 
       if (!product) {

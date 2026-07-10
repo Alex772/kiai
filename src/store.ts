@@ -36,7 +36,7 @@ function mapRow(row: OrderRow): Order {
     id: row.id,
     userId: row.user_id,
     product: {
-      id: row.product_id,
+      id: Number(row.product_id),
       name: row.product_name,
       description: row.product_description,
       price: Number(row.product_price),
@@ -58,7 +58,7 @@ export async function createOrder(input: { id: string; userId: string; product: 
     [
       input.id,
       input.userId,
-      input.product.id,
+      String(input.product.id),
       input.product.name,
       input.product.description,
       input.product.price,
