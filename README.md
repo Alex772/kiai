@@ -4,17 +4,26 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 
 ## Funcionalidades
 
-- `/loja`: lista produtos configurados.
+- `/loja`: lista produtos (do banco de dados) com botão "Comprar" em cada um.
 - `/comprar`: cria um pedido e gera PIX copia-e-cola pelo Mercado Pago.
-- `/pedido`: consulta o status de um pedido em memória.
+- `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, datas).
+- `/pedidos`: lista os últimos pedidos do usuário.
+- `/addproduto`, `/editarproduto`, `/removerproduto`: gerenciam o catálogo (apenas dono do servidor ou cargo em `ADMIN_ROLE_ID`).
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago e envia DM quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
-- Tratamento de erro nas interações para o Discord não ficar preso em “pensando...” se o Mercado Pago recusar a requisição.
+- Tratamento de erro nas interações para o Discord não ficar preso em "pensando..." se o Mercado Pago recusar a requisição.
 
-> Atenção: esta versão inicial mantém pedidos em memória. Para produção, adicione PostgreSQL/Redis no Railway para não perder pedidos ao reiniciar o deploy.
->
 > Se as variáveis obrigatórias ainda não estiverem configuradas, o processo não derruba o Railway: ele sobe apenas o servidor HTTP, mostra as variáveis faltantes em `/health` e só conecta o bot ao Discord quando `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` e `MERCADO_PAGO_ACCESS_TOKEN` existirem.
+
+## Banco de dados (PostgreSQL no Railway)
+
+Produtos e pedidos agora são persistidos em PostgreSQL (antes ficavam em memória e se perdiam a cada redeploy).
+
+1. No Railway, adicione o serviço **Postgres** ao projeto (se ainda não tiver).
+2. No serviço do **bot**, adicione a variável `DATABASE_URL` referenciando a `DATABASE_URL` do serviço Postgres (Railway permite usar `${{Postgres.DATABASE_URL}}` como referência entre serviços, ou copiar o valor direto da aba Variables do Postgres). Use a URL **privada** (`*.railway.internal`), não a pública — é mais rápida e não conta como egress.
+3. Para rodar localmente (fora do Railway), use a `DATABASE_PUBLIC_URL` do Postgres (proxy `*.proxy.rlwy.net`) na variável `DATABASE_PUBLIC_URL` do seu `.env`.
+4. Não é preciso criar tabelas manualmente: ao iniciar, o bot roda uma migração automática (`CREATE TABLE IF NOT EXISTS ...`) e, se a tabela `products` estiver vazia, insere 3 produtos de exemplo (`vip_bronze`, `vip_prata`, `vip_ouro`).
 
 ## Configuração local
 
@@ -54,7 +63,7 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 
 ## Personalizando produtos
 
-Edite `src/products.ts` para alterar IDs, nomes, descrições, preços e mensagens de entrega.
+Os produtos ficam no banco de dados, não mais no código. Use `/addproduto`, `/editarproduto` e `/removerproduto` no Discord (dono do servidor). Os 3 produtos de exemplo inseridos automaticamente na primeira execução podem ser editados ou removidos da mesma forma.
 
 
 ## Erros ao gerar PIX

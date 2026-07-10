@@ -6,6 +6,24 @@ export const commands = [
     .setDescription('Abre a loja interativa usando Components V2.'),
 
   new SlashCommandBuilder()
+    .setName('comprar')
+    .setDescription('Compra um produto da loja via PIX (Mercado Pago).')
+    .addStringOption((o) =>
+      o.setName('produto').setDescription('Produto que deseja comprar').setRequired(true).setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('pedido')
+    .setDescription('Consulta o status detalhado de um pedido.')
+    .addStringOption((o) =>
+      o.setName('id').setDescription('ID do pedido').setRequired(true).setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('pedidos')
+    .setDescription('Lista os seus pedidos mais recentes.'),
+
+  new SlashCommandBuilder()
     .setName('addproduto')
     .setDescription('Adiciona um produto à loja. (Apenas dono do servidor)')
     .addStringOption((o) => o.setName('id').setDescription('ID único do produto (sem espaços)').setRequired(true))
@@ -13,6 +31,17 @@ export const commands = [
     .addNumberOption((o) => o.setName('preco').setDescription('Preço em R$').setRequired(true))
     .addStringOption((o) => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
     .addStringOption((o) => o.setName('entrega').setDescription('Mensagem enviada após pagamento aprovado').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('editarproduto')
+    .setDescription('Edita um produto existente. (Apenas dono do servidor)')
+    .addStringOption((o) =>
+      o.setName('produto').setDescription('Produto a editar').setRequired(true).setAutocomplete(true)
+    )
+    .addStringOption((o) => o.setName('nome').setDescription('Novo nome (opcional)').setRequired(false))
+    .addNumberOption((o) => o.setName('preco').setDescription('Novo preço em R$ (opcional)').setRequired(false))
+    .addStringOption((o) => o.setName('descricao').setDescription('Nova descrição (opcional)').setRequired(false))
+    .addStringOption((o) => o.setName('entrega').setDescription('Nova mensagem de entrega (opcional)').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('removerproduto')

@@ -56,10 +56,10 @@ export function startHttpServer(
 
         if (paymentId && paymentId !== 'undefined') {
           const paymentStatus = await getPaymentStatus(paymentId);
-          const order = findOrderByPaymentId(paymentId);
+          const order = await findOrderByPaymentId(paymentId);
 
           if (order && paymentStatus === 'approved' && order.status !== 'approved') {
-            const updated = updateOrder(order.id, { status: 'approved' });
+            const updated = await updateOrder(order.id, { status: 'approved' });
             const user = await client.users.fetch(order.userId);
             await user.send(`Pagamento aprovado para **${order.product.name}**.\n${updated?.product.deliveryMessage}`);
           }
