@@ -138,6 +138,16 @@ Pedidos que ficam **pendentes por mais de 1 hora sem pagamento** são cancelados
 - Se o usuário clicar em "Comprar" de novo para o mesmo produto enquanto ainda tem um PIX pendente válido, o bot reaproveita o pedido existente em vez de gerar um PIX duplicado.
 - Caso o pagamento seja confirmado bem no limite do prazo (ou logo depois), o bot ainda assim libera a entrega normalmente — a expiração é só para não acumular pedidos "mortos" no banco.
 
+## Verificação automática de pagamento (backup do webhook)
+
+A entrega (cargo + DM) normalmente acontece assim que o Mercado Pago avisa o bot pelo webhook. Mas se essa notificação não chegar por algum motivo — `PUBLIC_BASE_URL` mal configurado, instabilidade de rede, etc — o comprador não deveria ficar esperando pra sempre. Por isso, a cada 2 minutos o bot também verifica diretamente na API do Mercado Pago todo pedido pendente que já tem um PIX gerado, e libera a entrega automaticamente assim que detectar aprovação — sem precisar de nenhum comando manual.
+
+Isso significa que a entrega automática tem dois caminhos independentes:
+1. **Webhook** (imediato, assim que o Mercado Pago notifica).
+2. **Verificação periódica** (a cada 2 minutos, como rede de segurança).
+
+Se o webhook estiver funcionando direito, a entrega é praticamente instantânea. Se não estiver, o pior caso é o comprador esperar até 2 minutos — bem melhor do que depender de alguém clicar em "Verificar pagamento" manualmente. Para checar se o webhook está configurado corretamente, veja a seção "Erros ao gerar PIX" abaixo.
+
 ## Personalizando produtos
 
 Os produtos ficam no banco de dados, não mais no código. Use `/addproduto`, `/editarproduto` e `/removerproduto` no Discord (dono do servidor). Os 3 produtos de exemplo inseridos automaticamente na primeira execução podem ser editados ou removidos da mesma forma.

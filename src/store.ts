@@ -118,6 +118,18 @@ export async function findRecentPendingOrder(userId: string, productId: number):
 }
 
 /**
+ * Lista todo pedido ainda pendente que já tem um PIX gerado (paymentId presente).
+ * Usado pela verificação automática periódica de pagamentos (fallback caso o webhook do
+ * Mercado Pago não chegue por algum motivo).
+ */
+export async function listPendingOrdersWithPayment(): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders WHERE status = 'pending' AND payment_id IS NOT NULL ORDER BY created_at ASC`
+  );
+  return rows.map(mapRow);
+}
+
+/**
  * Marca como "cancelled" todo pedido pendente criado há mais de ORDER_EXPIRATION_MINUTES sem pagamento.
  * Retorna os pedidos que foram cancelados (útil para log).
  */

@@ -45,6 +45,7 @@ import {
   createOrder,
   findRecentPendingOrder,
   cancelExpiredOrders,
+  listPendingOrdersWithPayment,
   getOrder,
   listOrdersByUser,
   updateOrder,
@@ -1067,6 +1068,7 @@ async function migrateWithRetry(maxAttempts = 10, delayMs = 3000) {
 }
 
 const CLEANUP_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
+const PAYMENT_POLL_INTERVAL_MS = 2 * 60_000; // roda a cada 2 minutos
 
 async function cleanupExpiredOrdersJob() {
   try {
@@ -1089,6 +1091,38 @@ async function cleanupExpiredOrdersJob() {
   }
 }
 
+/**
+ * Verificação automática de pagamentos pendentes — funciona como um "backup" caso a notificação
+ * (webhook) do Mercado Pago não chegue por algum motivo (PUBLIC_BASE_URL errado, instabilidade de
+ * rede, etc). Sem isso, a entrega (cargo + DM) só aconteceria se o usuário clicasse manualmente em
+ * "Verificar pagamento". Roda a cada poucos minutos e consulta a API do Mercado Pago diretamente.
+ */
+async function pollPendingPaymentsJob() {
+  try {
+    const pending = await listPendingOrdersWithPayment();
+
+    for (const order of pending) {
+      if (!order.paymentId) continue;
+
+      try {
+        const status = await getPaymentStatus(order.paymentId);
+
+        if (status === 'approved') {
+          const updated = await updateOrder(order.id, { status: 'approved' });
+          await deliverOrder(client, updated ?? order);
+          console.log(`Pedido ${order.id} aprovado detectado pela verificação automática (webhook não chegou a tempo).`);
+        } else if (status === 'rejected' || status === 'cancelled') {
+          await updateOrder(order.id, { status: status === 'rejected' ? 'rejected' : 'cancelled' });
+        }
+      } catch (error) {
+        console.error(`Falha ao verificar automaticamente o pagamento do pedido ${order.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Falha ao rodar a verificação automática de pagamentos pendentes:', error);
+  }
+}
+
 if (missingEnv.length > 0) {
   console.error(`Bot iniciado em modo de configuração incompleta. Defina as variáveis no Railway: ${missingEnv.join(', ')}`);
 } else {
@@ -1096,6 +1130,8 @@ if (missingEnv.length > 0) {
 
   await cleanupExpiredOrdersJob();
   setInterval(cleanupExpiredOrdersJob, CLEANUP_INTERVAL_MS);
+
+  setInterval(pollPendingPaymentsJob, PAYMENT_POLL_INTERVAL_MS);
 
   if (config.autoRegisterCommands) {
     try {
