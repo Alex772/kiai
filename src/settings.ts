@@ -8,6 +8,10 @@ export type StoreSettings = {
   adminRoleId?: string;
   /** Cargo com acesso limitado: só gerencia produtos (adicionar/editar/remover). */
   moderatorRoleId?: string;
+  /** Canal de texto onde é postado o histórico de vendas/compras (quem comprou, o quê, quando, status). */
+  salesLogChannelId?: string;
+  /** Canal de texto onde é postado o log administrativo sensível (alterações em produtos, config e permissões). */
+  adminLogChannelId?: string;
 };
 
 export type StoreSettingsPatch = Partial<{
@@ -17,6 +21,9 @@ export type StoreSettingsPatch = Partial<{
   /** Passe null para remover o cargo configurado. */
   adminRoleId: string | null;
   moderatorRoleId: string | null;
+  /** Passe null para remover o canal configurado. */
+  salesLogChannelId: string | null;
+  adminLogChannelId: string | null;
 }>;
 
 const DEFAULTS: StoreSettings = {
@@ -36,7 +43,9 @@ export async function getStoreSettings(): Promise<StoreSettings> {
     title: map.title ?? DEFAULTS.title,
     description: map.description ?? DEFAULTS.description,
     adminRoleId: map.admin_role_id ?? undefined,
-    moderatorRoleId: map.moderator_role_id ?? undefined
+    moderatorRoleId: map.moderator_role_id ?? undefined,
+    salesLogChannelId: map.sales_log_channel_id ?? undefined,
+    adminLogChannelId: map.admin_log_channel_id ?? undefined
   };
 }
 
@@ -56,6 +65,16 @@ export async function updateStoreSettings(patch: StoreSettingsPatch): Promise<St
   if (patch.moderatorRoleId !== undefined) {
     if (patch.moderatorRoleId === null) deletes.push('moderator_role_id');
     else upserts.push(['moderator_role_id', patch.moderatorRoleId]);
+  }
+
+  if (patch.salesLogChannelId !== undefined) {
+    if (patch.salesLogChannelId === null) deletes.push('sales_log_channel_id');
+    else upserts.push(['sales_log_channel_id', patch.salesLogChannelId]);
+  }
+
+  if (patch.adminLogChannelId !== undefined) {
+    if (patch.adminLogChannelId === null) deletes.push('admin_log_channel_id');
+    else upserts.push(['admin_log_channel_id', patch.adminLogChannelId]);
   }
 
   for (const [key, value] of upserts) {

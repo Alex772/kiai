@@ -28,6 +28,7 @@ import { config, getMissingRequiredEnv } from './config.js';
 import { deliverOrder } from './delivery.js';
 import { toUserErrorMessage } from './errors.js';
 import { formatPrice, parsePrice } from './format.js';
+import { diffFields, logAdmin, logSale, LOG_COLOR } from './logging.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import {
   addProduct,
@@ -144,6 +145,14 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
     qrCode: pix.qrCode,
     qrCodeBase64: pix.qrCodeBase64
   });
+
+  await logSale(client, {
+    title: '🛒 Pedido criado',
+    description:
+      `**Comprador:** <@${userId}> (\`${userId}\`)\n**Produto:** ${product.name}\n**Valor:** R$ ${formatPrice(product.price)}\n**Pedido:** \`${order.id}\``,
+    color: LOG_COLOR.created
+  });
+
   return { order: updated ?? order, pix, reused: false };
 }
 
@@ -435,6 +444,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
         position
       });
 
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '➕ Produto adicionado',
+        description:
+          `**ID:** \`${product.id}\` • **Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n` +
+          `**Descrição:** ${product.description}\n**Mensagem de entrega:** ${product.deliveryMessage}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}`,
+        color: LOG_COLOR.added
+      });
+
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
@@ -505,6 +523,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await removeProduct(productId);
 
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '🗑️ Produto removido',
+        description: `**ID:** \`${product.id}\`\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Cargo de entrega:** ${product.deliveryRoleId ? `<@&${product.deliveryRoleId}>` : 'Nenhum'}`,
+        color: LOG_COLOR.removed
+      });
+
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(`## 🗑️ Produto removido\n**${product.name}** foi removido da loja.`)
@@ -538,7 +563,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      const before = await getStoreSettings();
       const updated = await updateStoreSettings({ itemsPerPage, title, description });
+
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '⚙️ Configuração da loja alterada',
+        description: diffFields(
+          { 'Itens por página': String(before.itemsPerPage), Título: before.title, Descrição: before.description },
+          { 'Itens por página': String(updated.itemsPerPage), Título: updated.title, Descrição: updated.description }
+        ),
+        color: LOG_COLOR.edited
+      });
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
@@ -585,12 +621,81 @@ client.on(Events.InteractionCreate, async (interaction) => {
         moderatorRoleId: removerModerador ? null : cargoModerador?.id
       });
 
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '🔐 Permissões da loja alteradas',
+        description:
+          `**Cargo admin:** ${updated.adminRoleId ? `<@&${updated.adminRoleId}>` : 'Não definido'}\n` +
+          `**Cargo moderador:** ${updated.moderatorRoleId ? `<@&${updated.moderatorRoleId}>` : 'Não definido'}`,
+        color: LOG_COLOR.sensitive
+      });
+
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
           `## ✅ Permissões atualizadas\n` +
             `**Cargo admin:** ${updated.adminRoleId ? `<@&${updated.adminRoleId}>` : 'Não definido (só o dono do servidor)'}\n` +
             `**Cargo moderador:** ${updated.moderatorRoleId ? `<@&${updated.moderatorRoleId}>` : 'Não definido'}`
+        )
+      );
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    // /logs
+    if (interaction.commandName === 'logs') {
+      if (!isGuildOwner(interaction)) {
+        await interaction.reply({
+          content: 'Apenas o dono do servidor pode configurar os canais de log.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const canalVendas = interaction.options.getChannel('canal_vendas');
+      const canalAdmin = interaction.options.getChannel('canal_admin');
+      const removerVendas = interaction.options.getBoolean('remover_vendas') ?? false;
+      const removerAdmin = interaction.options.getBoolean('remover_admin') ?? false;
+
+      const semMudancas = !canalVendas && !canalAdmin && !removerVendas && !removerAdmin;
+
+      if (semMudancas) {
+        const current = await getStoreSettings();
+        await interaction.editReply(
+          `## 📋 Canais de log atuais\n` +
+            `**Vendas/compras:** ${current.salesLogChannelId ? `<#${current.salesLogChannelId}>` : 'Não configurado'}\n` +
+            `**Admin (sensível):** ${current.adminLogChannelId ? `<#${current.adminLogChannelId}>` : 'Não configurado'}\n\n` +
+            `Dica: no canal admin, restrinja a visualização apenas para você nas permissões do canal do Discord — o bot só posta lá, não controla quem enxerga o canal.`
+        );
+        return;
+      }
+
+      const updated = await updateStoreSettings({
+        salesLogChannelId: removerVendas ? null : canalVendas?.id,
+        adminLogChannelId: removerAdmin ? null : canalAdmin?.id
+      });
+
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '📋 Canais de log alterados',
+        description:
+          `**Vendas/compras:** ${updated.salesLogChannelId ? `<#${updated.salesLogChannelId}>` : 'Não configurado'}\n` +
+          `**Admin:** ${updated.adminLogChannelId ? `<#${updated.adminLogChannelId}>` : 'Não configurado'}`,
+        color: LOG_COLOR.sensitive
+      });
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## ✅ Canais de log atualizados\n` +
+            `**Vendas/compras:** ${updated.salesLogChannelId ? `<#${updated.salesLogChannelId}>` : 'Não configurado'}\n` +
+            `**Admin (sensível):** ${updated.adminLogChannelId ? `<#${updated.adminLogChannelId}>` : 'Não configurado'}\n\n` +
+            (updated.adminLogChannelId
+              ? `⚠️ Lembre-se de restringir quem pode ver o canal admin nas permissões do Discord — o bot posta lá, mas não controla visibilidade.`
+              : '')
         )
       );
 
@@ -636,12 +741,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const productId = Number(interaction.customId.split(':')[2]);
       const roleId = interaction.values[0];
 
+      const before = await findProduct(productId);
       const updated = await setProductDeliveryRole(productId, roleId);
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
+
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '🎭 Cargo de entrega alterado',
+        description:
+          `**Produto:** ${updated.name} (\`${updated.id}\`)\n` +
+          `**Antes:** ${before?.deliveryRoleId ? `<@&${before.deliveryRoleId}>` : 'Nenhum'}\n` +
+          `**Agora:** <@&${roleId}>`,
+        color: LOG_COLOR.edited
+      });
 
       await interaction.update(buildEditProductOverviewReply(updated));
     }
@@ -660,6 +776,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.customId.startsWith('editarproduto:modal:')) {
       const productId = Number(interaction.customId.split(':')[2]);
+      const before = await findProduct(productId);
 
       const name = interaction.fields.getTextInputValue('nome').trim();
       const priceRaw = interaction.fields.getTextInputValue('preco').trim();
@@ -684,6 +801,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
+      }
+
+      if (before) {
+        await logAdmin(client, {
+          actor: interaction.user,
+          title: '✏️ Produto editado',
+          description:
+            `**Produto:** ${updated.name} (\`${updated.id}\`)\n` +
+            diffFields(
+              {
+                Nome: before.name,
+                Preço: `R$ ${formatPrice(before.price)}`,
+                Descrição: before.description,
+                'Mensagem de entrega': before.deliveryMessage,
+                Posição: String(before.position)
+              },
+              {
+                Nome: updated.name,
+                Preço: `R$ ${formatPrice(updated.price)}`,
+                Descrição: updated.description,
+                'Mensagem de entrega': updated.deliveryMessage,
+                Posição: String(updated.position)
+              }
+            ),
+          color: LOG_COLOR.edited
+        });
       }
 
       if (interaction.isFromMessage()) {
@@ -789,12 +932,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.customId.startsWith('editarproduto:clearrole:')) {
       const productId = Number(interaction.customId.split(':')[2]);
+      const before = await findProduct(productId);
       const updated = await setProductDeliveryRole(productId, null);
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
+
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '🎭 Cargo de entrega removido',
+        description: `**Produto:** ${updated.name} (\`${updated.id}\`)\n**Cargo removido:** ${before?.deliveryRoleId ? `<@&${before.deliveryRoleId}>` : 'Nenhum'}`,
+        color: LOG_COLOR.removed
+      });
 
       await interaction.update(buildEditProductOverviewReply(updated));
       return;
@@ -924,6 +1075,14 @@ async function cleanupExpiredOrdersJob() {
       console.log(
         `${cancelled.length} pedido(s) pendente(s) expiraram (mais de ${ORDER_EXPIRATION_MINUTES} min sem pagamento) e foram marcados como cancelados.`
       );
+
+      await logSale(client, {
+        title: `🕐 ${cancelled.length} pedido(s) expirado(s)`,
+        description: cancelled
+          .map((o) => `<@${o.userId}> — ${o.product.name} — R$ ${formatPrice(o.product.price)} (\`${o.id}\`)`)
+          .join('\n'),
+        color: LOG_COLOR.expired
+      });
     }
   } catch (error) {
     console.error('Falha ao limpar pedidos expirados:', error);

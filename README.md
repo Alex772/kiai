@@ -13,6 +13,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/removerproduto`: remove um produto da loja (os produtos seguintes reordenam automaticamente pra fechar o espaço).
 - `/lojaconfig`: configura título, descrição e quantidade de itens por página da loja. Sem argumentos, mostra a configuração atual.
 - `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
+- `/logs`: define os canais de log da loja (veja a seção "Logs" abaixo). Sem argumentos, mostra a configuração atual.
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago, confirma a assinatura, e libera a entrega (cargo + DM) quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
@@ -49,6 +50,24 @@ Cada produto pode ter um cargo do Discord vinculado, entregue automaticamente as
 2. Ter o cargo do bot posicionado **acima**, na lista de cargos do servidor, do cargo que ele vai entregar (regra do próprio Discord — um bot nunca pode atribuir um cargo mais alto que o dele).
 
 Se a atribuição falhar (permissão faltando, hierarquia errada, etc.), o bot não trava a compra: a mensagem de entrega em texto ainda é enviada por DM, com um aviso pedindo pra um administrador liberar o cargo manualmente, e o erro completo fica no log do Railway.
+
+## Logs
+
+Use `/logs` (dono do servidor apenas) pra configurar dois canais de texto separados:
+
+- **`canal_vendas`** — histórico de vendas/compras: todo pedido criado, todo pagamento aprovado, e pedidos que expiraram sem pagamento. Serve como registro público (dentro do servidor) de quem comprou o quê e quando pagou.
+- **`canal_admin`** — log administrativo sensível: toda alteração feita por quem tem acesso de moderador/admin — produto adicionado/editado/removido, cargo de entrega alterado, configuração da loja mudada, permissões alteradas, canais de log alterados. Serve como trilha de auditoria pra pegar qualquer uso indevido do acesso concedido.
+
+Exemplos:
+```
+/logs canal_vendas:#vendas-log canal_admin:#admin-log
+/logs remover_vendas:true
+/logs            (sem argumentos → mostra a configuração atual)
+```
+
+**Importante sobre o canal admin:** o bot só posta as mensagens nesse canal — ele não controla quem consegue ver o canal. Como esse log tem dados sensíveis (é justamente o mecanismo pra pegar abuso de permissão), configure as permissões desse canal no próprio Discord pra que só o dono do servidor (ou quem for de extrema confiança) consiga vê-lo. Sem isso, um moderador mal-intencionado poderia ver o log que deveria justamente vigiar as ações dele.
+
+Nenhum dos dois canais é obrigatório — sem configurar, o bot simplesmente não envia esses logs (mas continua funcionando normalmente).
 
 ## Banco de dados (PostgreSQL no Railway)
 

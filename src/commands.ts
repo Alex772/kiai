@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { ChannelType, SlashCommandBuilder } from 'discord.js';
 
 export const commands = [
   new SlashCommandBuilder()
@@ -71,5 +71,27 @@ export const commands = [
     .addBooleanOption((o) => o.setName('remover_admin').setDescription('Remove o cargo admin configurado').setRequired(false))
     .addBooleanOption((o) =>
       o.setName('remover_moderador').setDescription('Remove o cargo moderador configurado').setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('logs')
+    .setDescription('Configura os canais de log da loja. (Apenas dono do servidor)')
+    .addChannelOption((o) =>
+      o
+        .setName('canal_vendas')
+        .setDescription('Canal para o histórico de vendas/compras (quem comprou, o quê, quando, status)')
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption((o) =>
+      o
+        .setName('canal_admin')
+        .setDescription('Canal para o log administrativo sensível (alterações em produtos, config e permissões)')
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addBooleanOption((o) => o.setName('remover_vendas').setDescription('Remove o canal de log de vendas configurado').setRequired(false))
+    .addBooleanOption((o) =>
+      o.setName('remover_admin').setDescription('Remove o canal de log administrativo configurado').setRequired(false)
     )
 ].map((command) => command.toJSON());
