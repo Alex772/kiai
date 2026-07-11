@@ -1,19 +1,32 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import type { Client } from 'discord.js';
+import { config } from './config.js';
 import { getPaymentStatus } from './mercadoPago.js';
 import { findOrderByPaymentId, updateOrder } from './store.js';
+import { verifyMercadoPagoSignature } from './webhookSecurity.js';
 
 type RuntimeStatus = {
   discordReady: boolean;
   missingEnv: string[];
 };
 
-function readJsonBody(request: IncomingMessage) {
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
+const MAX_BODY_BYTES = 1_000_000; // 1 MB — suficiente para qualquer payload de webhook do Mercado Pago
+
+function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
     let raw = '';
-    request.on('data', (chunk) => {
+    let size = 0;
+
+    request.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('Corpo da requisição excede o tamanho máximo permitido.'));
+        request.destroy();
+        return;
+      }
       raw += chunk;
     });
+
     request.on('end', () => {
       try {
         resolve(raw ? JSON.parse(raw) : {});
@@ -21,7 +34,30 @@ function readJsonBody(request: IncomingMessage) {
         reject(error);
       }
     });
+
+    request.on('error', reject);
   });
+}
+
+// Rate limit simples em memória para o endpoint de webhook (protege contra flood/DoS básico).
+const requestTimestamps = new Map<string, number[]>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 60;
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const timestamps = (requestTimestamps.get(ip) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  timestamps.push(now);
+  requestTimestamps.set(ip, timestamps);
+  return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
+}
+
+function getClientIp(request: IncomingMessage): string {
+  const forwarded = request.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0].trim();
+  }
+  return request.socket.remoteAddress ?? 'unknown';
 }
 
 export function startHttpServer(
@@ -43,12 +79,43 @@ export function startHttpServer(
     }
 
     if (request.method === 'POST' && request.url?.startsWith('/webhooks/mercado-pago')) {
+      const ip = getClientIp(request);
+
+      if (isRateLimited(ip)) {
+        response.writeHead(429, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'rate_limited' }));
+        return;
+      }
+
       try {
         const status = getRuntimeStatus();
         if (status.missingEnv.length > 0) {
           response.writeHead(503, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ error: 'missing_required_env', missingEnv: status.missingEnv }));
           return;
+        }
+
+        const url = new URL(request.url, 'http://internal');
+        const dataIdFromQuery = url.searchParams.get('data.id') ?? undefined;
+
+        if (config.mercadoPagoWebhookSecret) {
+          const isValid = verifyMercadoPagoSignature({
+            xSignature: request.headers['x-signature'] as string | undefined,
+            xRequestId: request.headers['x-request-id'] as string | undefined,
+            dataId: dataIdFromQuery,
+            secret: config.mercadoPagoWebhookSecret
+          });
+
+          if (!isValid) {
+            console.warn(`Webhook do Mercado Pago rejeitado: assinatura inválida (ip=${ip}).`);
+            response.writeHead(401, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: 'invalid_signature' }));
+            return;
+          }
+        } else {
+          console.warn(
+            'MERCADO_PAGO_WEBHOOK_SECRET não configurado: pulando validação de assinatura do webhook. Configure essa variável para maior segurança.'
+          );
         }
 
         const body = await readJsonBody(request);

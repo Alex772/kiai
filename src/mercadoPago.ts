@@ -1,7 +1,7 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 import { config } from './config.js';
 import { describeError } from './errors.js';
-import type { Order } from './store.js';
+import { ORDER_EXPIRATION_MINUTES, type Order } from './store.js';
 
 const client = new MercadoPagoConfig({ accessToken: config.mercadoPagoAccessToken });
 const paymentClient = new Payment(client);
@@ -55,6 +55,7 @@ export async function createPixPayment(order: Order) {
         payment_method_id: 'pix',
         external_reference: order.id,
         notification_url: notificationUrl,
+        date_of_expiration: new Date(Date.now() + ORDER_EXPIRATION_MINUTES * 60_000).toISOString(),
         payer: {
           email: resolvePayerEmail(order.userId),
           first_name: 'Cliente',

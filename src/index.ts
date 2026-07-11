@@ -29,7 +29,16 @@ import { formatPrice, parsePrice } from './format.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
 import { addProduct, countProducts, editProduct, findProduct, listProducts, removeProduct, type Product } from './products.js';
 import { getStoreSettings, updateStoreSettings } from './settings.js';
-import { createOrder, getOrder, listOrdersByUser, updateOrder, type Order } from './store.js';
+import {
+  createOrder,
+  findRecentPendingOrder,
+  cancelExpiredOrders,
+  getOrder,
+  listOrdersByUser,
+  updateOrder,
+  ORDER_EXPIRATION_MINUTES,
+  type Order
+} from './store.js';
 import { registerSlashCommands } from './registerSlashCommands.js';
 import { startHttpServer } from './server.js';
 import { migrate } from './db.js';
@@ -88,6 +97,16 @@ function orderDetailContent(order: Order) {
 }
 
 async function buildPixOrder(userId: string, product: Product) {
+  const existing = await findRecentPendingOrder(userId, product.id);
+
+  if (existing && existing.paymentId && existing.qrCode) {
+    return {
+      order: existing,
+      pix: { paymentId: existing.paymentId, qrCode: existing.qrCode, qrCodeBase64: existing.qrCodeBase64 },
+      reused: true
+    };
+  }
+
   const order = await createOrder({ id: randomUUID(), userId, product });
   const pix = await createPixPayment(order);
   const updated = await updateOrder(order.id, {
@@ -95,10 +114,10 @@ async function buildPixOrder(userId: string, product: Product) {
     qrCode: pix.qrCode,
     qrCodeBase64: pix.qrCodeBase64
   });
-  return { order: updated ?? order, pix };
+  return { order: updated ?? order, pix, reused: false };
 }
 
-function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64?: string }) {
+function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64?: string }, reused = false) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(`## 💸 Pagamento PIX — ${order.product.name}`)
@@ -106,7 +125,9 @@ function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\nEscaneie o QR Code abaixo pelo app do seu banco ou copie o código PIX. O bot avisará por DM quando o pagamento for aprovado.`
+      reused
+        ? `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\nVocê já tinha um PIX pendente para este produto — aqui está ele de novo. Escaneie o QR Code pelo app do seu banco ou copie o código. Ele expira ${ORDER_EXPIRATION_MINUTES} minutos após a criação do pedido.`
+        : `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\nEscaneie o QR Code abaixo pelo app do seu banco ou copie o código PIX. O bot avisará por DM quando o pagamento for aprovado. Este PIX expira em ${ORDER_EXPIRATION_MINUTES} minutos.`
     )
   );
 
@@ -243,14 +264,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const { order, pix } = await buildPixOrder(interaction.user.id, product);
+      const { order, pix, reused } = await buildPixOrder(interaction.user.id, product);
 
       if (!pix.paymentId || !pix.qrCode) {
         await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
         return;
       }
 
-      await interaction.editReply(buildPixPaymentReply(order, pix));
+      await interaction.editReply(buildPixPaymentReply(order, pix, reused));
       return;
     }
 
@@ -268,7 +289,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(orderDetailContent(order)));
 
-      if (order.status === 'pending' && order.paymentId) {
+      if ((order.status === 'pending' || order.status === 'cancelled') && order.paymentId) {
         container.addActionRowComponents(
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
@@ -628,14 +649,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const { order, pix } = await buildPixOrder(interaction.user.id, product);
+      const { order, pix, reused } = await buildPixOrder(interaction.user.id, product);
 
       if (!pix.paymentId || !pix.qrCode) {
         await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
         return;
       }
 
-      await interaction.editReply(buildPixPaymentReply(order, pix));
+      await interaction.editReply(buildPixPaymentReply(order, pix, reused));
       return;
     }
 
@@ -704,10 +725,28 @@ async function migrateWithRetry(maxAttempts = 10, delayMs = 3000) {
   }
 }
 
+const CLEANUP_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
+
+async function cleanupExpiredOrdersJob() {
+  try {
+    const cancelled = await cancelExpiredOrders();
+    if (cancelled.length > 0) {
+      console.log(
+        `${cancelled.length} pedido(s) pendente(s) expiraram (mais de ${ORDER_EXPIRATION_MINUTES} min sem pagamento) e foram marcados como cancelados.`
+      );
+    }
+  } catch (error) {
+    console.error('Falha ao limpar pedidos expirados:', error);
+  }
+}
+
 if (missingEnv.length > 0) {
   console.error(`Bot iniciado em modo de configuração incompleta. Defina as variáveis no Railway: ${missingEnv.join(', ')}`);
 } else {
   await migrateWithRetry();
+
+  await cleanupExpiredOrdersJob();
+  setInterval(cleanupExpiredOrdersJob, CLEANUP_INTERVAL_MS);
 
   if (config.autoRegisterCommands) {
     try {

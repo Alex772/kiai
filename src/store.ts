@@ -3,6 +3,9 @@ import type { Product } from './products.js';
 
 export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
+/** Tempo (em minutos) que um pedido pode ficar pendente sem pagamento antes de expirar automaticamente. */
+export const ORDER_EXPIRATION_MINUTES = 60;
+
 export type Order = {
   id: string;
   userId: string;
@@ -82,6 +85,36 @@ export async function listOrdersByUser(userId: string, limit = 10): Promise<Orde
   const rows = await query<OrderRow>(
     'SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2',
     [userId, limit]
+  );
+  return rows.map(mapRow);
+}
+
+/**
+ * Busca um pedido pendente recente do mesmo usuário para o mesmo produto, dentro da janela de expiração.
+ * Usado para evitar gerar múltiplos PIX duplicados quando o usuário clica em "Comprar" mais de uma vez.
+ */
+export async function findRecentPendingOrder(userId: string, productId: number): Promise<Order | undefined> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders
+     WHERE user_id = $1 AND product_id = $2 AND status = 'pending'
+       AND created_at > now() - ($3 || ' minutes')::interval
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId, String(productId), ORDER_EXPIRATION_MINUTES]
+  );
+  return rows[0] ? mapRow(rows[0]) : undefined;
+}
+
+/**
+ * Marca como "cancelled" todo pedido pendente criado há mais de ORDER_EXPIRATION_MINUTES sem pagamento.
+ * Retorna os pedidos que foram cancelados (útil para log).
+ */
+export async function cancelExpiredOrders(): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `UPDATE orders SET status = 'cancelled', updated_at = now()
+     WHERE status = 'pending' AND created_at <= now() - ($1 || ' minutes')::interval
+     RETURNING *`,
+    [ORDER_EXPIRATION_MINUTES]
   );
   return rows.map(mapRow);
 }

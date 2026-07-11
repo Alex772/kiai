@@ -55,7 +55,6 @@ export function describeError(error: unknown) {
   return parts.length > 0 ? parts.map(stringifyUnknown).join(' - ') : stringifyUnknown(error);
 }
 
-export function toUserErrorMessage(error: unknown) {
-  const description = describeError(error).slice(0, 1200);
-  return `Ocorreu um erro ao processar sua solicitação. Detalhes: ${description}`;
+export function toUserErrorMessage(_error: unknown) {
+  return 'Ocorreu um erro ao processar sua solicitação. Tente novamente em alguns instantes. Se o problema continuar, avise um administrador do servidor.';
 }

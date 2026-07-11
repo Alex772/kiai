@@ -26,10 +26,12 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('addproduto')
     .setDescription('Adiciona um produto à loja. (Apenas dono do servidor)')
-    .addStringOption((o) => o.setName('nome').setDescription('Nome do produto').setRequired(true))
-    .addStringOption((o) => o.setName('preco').setDescription('Preço em R$ (ex: 9,90)').setRequired(true))
-    .addStringOption((o) => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
-    .addStringOption((o) => o.setName('entrega').setDescription('Mensagem enviada após pagamento aprovado').setRequired(true))
+    .addStringOption((o) => o.setName('nome').setDescription('Nome do produto').setRequired(true).setMaxLength(100))
+    .addStringOption((o) => o.setName('preco').setDescription('Preço em R$ (ex: 9,90)').setRequired(true).setMaxLength(20))
+    .addStringOption((o) => o.setName('descricao').setDescription('Descrição do produto').setRequired(true).setMaxLength(500))
+    .addStringOption((o) =>
+      o.setName('entrega').setDescription('Mensagem enviada após pagamento aprovado').setRequired(true).setMaxLength(1000)
+    )
     .addIntegerOption((o) =>
       o.setName('posicao').setDescription('Posição na loja (opcional; padrão: final da lista)').setRequired(false).setMinValue(1)
     ),

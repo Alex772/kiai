@@ -68,6 +68,26 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 
 5. Use o comando de build `npm run build` e start `npm start`.
 
+## Segurança
+
+- **Assinatura do webhook validada:** o endpoint `POST /webhooks/mercado-pago` valida o header `x-signature` (HMAC-SHA256) usando `MERCADO_PAGO_WEBHOOK_SECRET`, conforme a especificação oficial do Mercado Pago. Sem essa variável configurada, o bot aceita as notificações mas avisa no log que está rodando sem validação — configure a assinatura secreta em "Suas integrações → Webhooks" no painel do Mercado Pago assim que possível.
+- **Aprovação sempre re-verificada na API:** mesmo com a assinatura validada, o bot nunca confia cegamente no corpo da notificação — ele sempre confere o status real do pagamento direto na API do Mercado Pago antes de liberar a entrega.
+- **Limite de tamanho e rate limit no webhook:** requisições acima de 1 MB são rejeitadas, e o endpoint aceita no máximo 60 requisições por minuto por IP.
+- **Mensagens de erro genéricas para o usuário:** detalhes internos de erro (Mercado Pago, banco de dados) não são mais expostos nas respostas do Discord — ficam apenas no log do Railway, visível só para quem administra o projeto.
+- **Variáveis de ambiente protegidas contra erro de digitação:** aspas/espaços colados por engano em qualquer variável (`DISCORD_TOKEN`, `MERCADO_PAGO_ACCESS_TOKEN`, `DATABASE_URL`, etc.) são removidos automaticamente antes de usar.
+- **Sem SQL injection:** todas as consultas usam parâmetros (`$1`, `$2`, ...), nunca concatenação de string.
+- **Comandos administrativos restritos:** `/addproduto`, `/editarproduto`, `/removerproduto` e `/lojaconfig` só funcionam para o dono do servidor ou para quem tem o cargo definido em `ADMIN_ROLE_ID`.
+- **Pedidos isolados por usuário:** `/pedido` e `/pedidos` só mostram pedidos do próprio usuário que executou o comando.
+
+## Expiração automática de pedidos
+
+Pedidos que ficam **pendentes por mais de 1 hora sem pagamento** são cancelados automaticamente:
+
+- A cada 5 minutos, o bot verifica e marca como `cancelled` todo pedido pendente criado há mais de 1 hora.
+- O próprio PIX gerado no Mercado Pago já é criado com validade de 1 hora (`date_of_expiration`), então o QR Code também para de funcionar no app do banco nesse mesmo prazo.
+- Se o usuário clicar em "Comprar" de novo para o mesmo produto enquanto ainda tem um PIX pendente válido, o bot reaproveita o pedido existente em vez de gerar um PIX duplicado.
+- Caso o pagamento seja confirmado bem no limite do prazo (ou logo depois), o bot ainda assim libera a entrega normalmente — a expiração é só para não acumular pedidos "mortos" no banco.
+
 ## Personalizando produtos
 
 Os produtos ficam no banco de dados, não mais no código. Use `/addproduto`, `/editarproduto` e `/removerproduto` no Discord (dono do servidor). Os 3 produtos de exemplo inseridos automaticamente na primeira execução podem ser editados ou removidos da mesma forma.
