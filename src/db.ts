@@ -69,11 +69,13 @@ export async function migrate() {
       CREATE TABLE IF NOT EXISTS orders (
         id UUID PRIMARY KEY,
         user_id TEXT NOT NULL,
+        guild_id TEXT,
         product_id TEXT NOT NULL,
         product_name TEXT NOT NULL,
         product_description TEXT NOT NULL,
         product_price NUMERIC(10,2) NOT NULL,
         product_delivery_message TEXT NOT NULL,
+        product_delivery_role_id TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         payment_id TEXT,
         qr_code TEXT,
@@ -82,6 +84,8 @@ export async function migrate() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS guild_id TEXT;');
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_delivery_role_id TEXT;');
     await client.query('CREATE INDEX IF NOT EXISTS orders_user_id_idx ON orders (user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS orders_payment_id_idx ON orders (payment_id);');
 
@@ -102,6 +106,7 @@ export async function migrate() {
           description TEXT NOT NULL,
           price NUMERIC(10,2) NOT NULL,
           delivery_message TEXT NOT NULL,
+          delivery_role_id TEXT,
           position INTEGER NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -118,6 +123,7 @@ export async function migrate() {
           description TEXT NOT NULL,
           price NUMERIC(10,2) NOT NULL,
           delivery_message TEXT NOT NULL,
+          delivery_role_id TEXT,
           position INTEGER NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -144,6 +150,7 @@ export async function migrate() {
       console.log('Migração: coluna position adicionada em products.');
     }
 
+    await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_id TEXT;');
     await client.query('CREATE INDEX IF NOT EXISTS products_position_idx ON products (position);');
 
     await client.query(`

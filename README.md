@@ -6,18 +6,49 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 
 - `/loja`: mostra os produtos com paginação (botões Anterior/Próxima e um botão "Página X/Y" que abre um campo pra digitar a página desejada) e botão "Comprar" em cada um.
 - `/comprar`: cria um pedido e gera PIX (código copia-e-cola + imagem do QR Code) pelo Mercado Pago.
-- `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, datas).
+- `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, cargo de entrega, datas).
 - `/pedidos`: lista os últimos pedidos do usuário.
-- `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; opcionalmente você escolhe a posição na lista).
-- `/editarproduto`: mostra a lista de produtos num menu — ao escolher um, abre um formulário (modal) já preenchido com nome, preço, descrição, mensagem de entrega e posição atuais, prontos pra editar.
+- `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; você pode escolher a posição na lista e um cargo do Discord pra entregar automaticamente).
+- `/editarproduto`: mostra a lista de produtos num menu — ao escolher um, abre uma tela com todos os dados do produto, um botão pra editar nome/preço/descrição/entrega/posição (via formulário) e um seletor de cargo pra definir ou trocar o cargo de entrega automática.
 - `/removerproduto`: remove um produto da loja (os produtos seguintes reordenam automaticamente pra fechar o espaço).
 - `/lojaconfig`: configura título, descrição e quantidade de itens por página da loja. Sem argumentos, mostra a configuração atual.
-- Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago e envia DM quando o pagamento for aprovado.
+- `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
+- Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago, confirma a assinatura, e libera a entrega (cargo + DM) quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
 - Tratamento de erro nas interações para o Discord não ficar preso em "pensando..." se o Mercado Pago recusar a requisição.
 
 > Se as variáveis obrigatórias ainda não estiverem configuradas, o processo não derruba o Railway: ele sobe apenas o servidor HTTP, mostra as variáveis faltantes em `/health` e só conecta o bot ao Discord quando `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` e `MERCADO_PAGO_ACCESS_TOKEN` existirem.
+
+## Permissões
+
+Por padrão, só o **dono do servidor** consegue usar os comandos administrativos. Use `/permissoes` (dono do servidor apenas — de propósito, pra ninguém conseguir se dar mais acesso sozinho) pra configurar dois cargos:
+
+- **Cargo admin** (`cargo_admin`): acesso total — configura a loja (`/lojaconfig`) e gerencia produtos (`/addproduto`, `/editarproduto`, `/removerproduto`).
+- **Cargo moderador** (`cargo_moderador`): acesso limitado — só gerencia produtos, não pode mexer em `/lojaconfig` nem em `/permissoes`.
+
+Exemplos:
+```
+/permissoes cargo_admin:@Gerente da Loja
+/permissoes cargo_moderador:@Atendente
+/permissoes remover_moderador:true
+/permissoes            (sem argumentos → mostra a configuração atual)
+```
+
+A variável de ambiente `ADMIN_ROLE_ID` continua funcionando como um fallback (equivalente ao cargo admin), mas o recomendado agora é usar `/permissoes`.
+
+## Entrega automática de cargo do Discord
+
+Cada produto pode ter um cargo do Discord vinculado, entregue automaticamente assim que o pagamento é aprovado (via webhook ou pelo botão "Verificar pagamento") — além da mensagem de entrega em texto.
+
+- Ao criar um produto: use a opção `cargo` em `/addproduto`.
+- Em um produto já existente: `/editarproduto` → escolha o produto → use o seletor "Escolher cargo de entrega" (ou o botão "Remover cargo de entrega" pra tirar).
+
+**Importante:** para o bot conseguir atribuir o cargo, ele precisa:
+1. Ter a permissão **Gerenciar Cargos** (Manage Roles) no servidor.
+2. Ter o cargo do bot posicionado **acima**, na lista de cargos do servidor, do cargo que ele vai entregar (regra do próprio Discord — um bot nunca pode atribuir um cargo mais alto que o dele).
+
+Se a atribuição falhar (permissão faltando, hierarquia errada, etc.), o bot não trava a compra: a mensagem de entrega em texto ainda é enviada por DM, com um aviso pedindo pra um administrador liberar o cargo manualmente, e o erro completo fica no log do Railway.
 
 ## Banco de dados (PostgreSQL no Railway)
 
@@ -76,7 +107,7 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 - **Mensagens de erro genéricas para o usuário:** detalhes internos de erro (Mercado Pago, banco de dados) não são mais expostos nas respostas do Discord — ficam apenas no log do Railway, visível só para quem administra o projeto.
 - **Variáveis de ambiente protegidas contra erro de digitação:** aspas/espaços colados por engano em qualquer variável (`DISCORD_TOKEN`, `MERCADO_PAGO_ACCESS_TOKEN`, `DATABASE_URL`, etc.) são removidos automaticamente antes de usar.
 - **Sem SQL injection:** todas as consultas usam parâmetros (`$1`, `$2`, ...), nunca concatenação de string.
-- **Comandos administrativos restritos:** `/addproduto`, `/editarproduto`, `/removerproduto` e `/lojaconfig` só funcionam para o dono do servidor ou para quem tem o cargo definido em `ADMIN_ROLE_ID`.
+- **Comandos administrativos restritos:** `/addproduto`, `/editarproduto` e `/removerproduto` exigem o cargo moderador ou admin (ou dono do servidor); `/lojaconfig` exige o cargo admin (ou dono do servidor); `/permissoes` — que decide quem tem esses cargos — só pode ser usado pelo dono do servidor, propositalmente, pra ninguém conseguir se auto-promover.
 - **Pedidos isolados por usuário:** `/pedido` e `/pedidos` só mostram pedidos do próprio usuário que executou o comando.
 
 ## Expiração automática de pedidos

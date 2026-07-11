@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import type { Client } from 'discord.js';
 import { config } from './config.js';
+import { deliverOrder } from './delivery.js';
 import { getPaymentStatus } from './mercadoPago.js';
 import { findOrderByPaymentId, updateOrder } from './store.js';
 import { verifyMercadoPagoSignature } from './webhookSecurity.js';
@@ -127,8 +128,7 @@ export function startHttpServer(
 
           if (order && paymentStatus === 'approved' && order.status !== 'approved') {
             const updated = await updateOrder(order.id, { status: 'approved' });
-            const user = await client.users.fetch(order.userId);
-            await user.send(`Pagamento aprovado para **${order.product.name}**.\n${updated?.product.deliveryMessage}`);
+            await deliverOrder(client, updated ?? order);
           }
         }
 

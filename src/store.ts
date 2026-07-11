@@ -9,6 +9,7 @@ export const ORDER_EXPIRATION_MINUTES = 60;
 export type Order = {
   id: string;
   userId: string;
+  guildId?: string;
   product: Product;
   status: OrderStatus;
   paymentId?: string;
@@ -21,11 +22,13 @@ export type Order = {
 type OrderRow = {
   id: string;
   user_id: string;
+  guild_id: string | null;
   product_id: string;
   product_name: string;
   product_description: string;
   product_price: string;
   product_delivery_message: string;
+  product_delivery_role_id: string | null;
   status: OrderStatus;
   payment_id: string | null;
   qr_code: string | null;
@@ -38,12 +41,14 @@ function mapRow(row: OrderRow): Order {
   return {
     id: row.id,
     userId: row.user_id,
+    guildId: row.guild_id ?? undefined,
     product: {
       id: Number(row.product_id),
       name: row.product_name,
       description: row.product_description,
       price: Number(row.product_price),
-      deliveryMessage: row.product_delivery_message
+      deliveryMessage: row.product_delivery_message,
+      deliveryRoleId: row.product_delivery_role_id ?? undefined
     },
     status: row.status,
     paymentId: row.payment_id ?? undefined,
@@ -54,18 +59,25 @@ function mapRow(row: OrderRow): Order {
   };
 }
 
-export async function createOrder(input: { id: string; userId: string; product: Product }): Promise<Order> {
+export async function createOrder(input: {
+  id: string;
+  userId: string;
+  guildId?: string;
+  product: Product;
+}): Promise<Order> {
   const rows = await query<OrderRow>(
-    `INSERT INTO orders (id, user_id, product_id, product_name, product_description, product_price, product_delivery_message, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'pending') RETURNING *`,
+    `INSERT INTO orders (id, user_id, guild_id, product_id, product_name, product_description, product_price, product_delivery_message, product_delivery_role_id, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') RETURNING *`,
     [
       input.id,
       input.userId,
+      input.guildId ?? null,
       String(input.product.id),
       input.product.name,
       input.product.description,
       input.product.price,
-      input.product.deliveryMessage
+      input.product.deliveryMessage,
+      input.product.deliveryRoleId ?? null
     ]
   );
   return mapRow(rows[0]);

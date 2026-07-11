@@ -6,6 +6,8 @@ export type Product = {
   description: string;
   price: number;
   deliveryMessage: string;
+  /** Cargo do Discord entregue automaticamente ao aprovar o pagamento (opcional). */
+  deliveryRoleId?: string;
   position?: number;
 };
 
@@ -14,6 +16,7 @@ export type ProductInput = {
   description: string;
   price: number;
   deliveryMessage: string;
+  deliveryRoleId?: string;
   /** Posição desejada na lista (1 = primeiro). Se omitido, entra no final. */
   position?: number;
 };
@@ -33,6 +36,7 @@ type ProductRow = {
   description: string;
   price: string;
   delivery_message: string;
+  delivery_role_id: string | null;
   position: number;
 };
 
@@ -43,6 +47,7 @@ function mapRow(row: ProductRow): Product {
     description: row.description,
     price: Number(row.price),
     deliveryMessage: row.delivery_message,
+    deliveryRoleId: row.delivery_role_id ?? undefined,
     position: row.position
   };
 }
@@ -76,9 +81,9 @@ export async function addProduct(input: ProductInput): Promise<Product> {
     await client.query('UPDATE products SET position = position + 1 WHERE position >= $1', [targetPosition]);
 
     const { rows } = await client.query<ProductRow>(
-      `INSERT INTO products (name, description, price, delivery_message, position)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [input.name, input.description, input.price, input.deliveryMessage, targetPosition]
+      `INSERT INTO products (name, description, price, delivery_message, delivery_role_id, position)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [input.name, input.description, input.price, input.deliveryMessage, input.deliveryRoleId ?? null, targetPosition]
     );
 
     await client.query('COMMIT');
@@ -179,4 +184,16 @@ export async function editProduct(productId: number, patch: ProductUpdate): Prom
   } finally {
     client.release();
   }
+}
+
+/**
+ * Define (ou remove, passando null) o cargo do Discord entregue automaticamente
+ * quando o pagamento desse produto for aprovado.
+ */
+export async function setProductDeliveryRole(productId: number, roleId: string | null): Promise<Product | undefined> {
+  const rows = await query<ProductRow>(
+    'UPDATE products SET delivery_role_id = $2, updated_at = now() WHERE id = $1 RETURNING *',
+    [productId, roleId]
+  );
+  return rows[0] ? mapRow(rows[0]) : undefined;
 }

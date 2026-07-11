@@ -11,6 +11,7 @@ import {
   MediaGalleryItemBuilder,
   MessageFlags,
   ModalBuilder,
+  RoleSelectMenuBuilder,
   SeparatorBuilder,
   SeparatorSpacingSize,
   StringSelectMenuBuilder,
@@ -24,10 +25,20 @@ import {
   type ChatInputCommandInteraction
 } from 'discord.js';
 import { config, getMissingRequiredEnv } from './config.js';
+import { deliverOrder } from './delivery.js';
 import { toUserErrorMessage } from './errors.js';
 import { formatPrice, parsePrice } from './format.js';
 import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
-import { addProduct, countProducts, editProduct, findProduct, listProducts, removeProduct, type Product } from './products.js';
+import {
+  addProduct,
+  countProducts,
+  editProduct,
+  findProduct,
+  listProducts,
+  removeProduct,
+  setProductDeliveryRole,
+  type Product
+} from './products.js';
 import { getStoreSettings, updateStoreSettings } from './settings.js';
 import {
   createOrder,
@@ -70,6 +81,24 @@ function isGuildOwner(interaction: ChatInputCommandInteraction): boolean {
   return false;
 }
 
+/** Acesso total: dono do servidor, cargo legado ADMIN_ROLE_ID (env) ou cargo admin configurado via /permissoes. */
+async function isStoreAdmin(interaction: ChatInputCommandInteraction): Promise<boolean> {
+  if (isGuildOwner(interaction)) return true;
+  if (!interaction.inCachedGuild()) return false;
+
+  const settings = await getStoreSettings();
+  return settings.adminRoleId ? interaction.member.roles.cache.has(settings.adminRoleId) : false;
+}
+
+/** Acesso limitado (gerenciar produtos): tudo que isStoreAdmin cobre, mais o cargo moderador configurado. */
+async function isStoreModerator(interaction: ChatInputCommandInteraction): Promise<boolean> {
+  if (await isStoreAdmin(interaction)) return true;
+  if (!interaction.inCachedGuild()) return false;
+
+  const settings = await getStoreSettings();
+  return settings.moderatorRoleId ? interaction.member.roles.cache.has(settings.moderatorRoleId) : false;
+}
+
 const STATUS_LABEL: Record<Order['status'], string> = {
   pending: '⏳ Pendente',
   approved: '✅ Aprovado',
@@ -88,6 +117,7 @@ function orderDetailContent(order: Order) {
     `**Produto:** ${order.product.name}`,
     `**Valor:** R$ ${formatPrice(order.product.price)}`,
     `**Status:** ${STATUS_LABEL[order.status]}`,
+    order.product.deliveryRoleId ? `**Cargo de entrega:** <@&${order.product.deliveryRoleId}>` : undefined,
     order.paymentId ? `**ID do pagamento (Mercado Pago):** \`${order.paymentId}\`` : undefined,
     `**Criado em:** ${formatDate(order.createdAt)}`,
     `**Última atualização:** ${formatDate(order.updatedAt)}`
@@ -96,7 +126,7 @@ function orderDetailContent(order: Order) {
   return lines.join('\n');
 }
 
-async function buildPixOrder(userId: string, product: Product) {
+async function buildPixOrder(userId: string, guildId: string | undefined, product: Product) {
   const existing = await findRecentPendingOrder(userId, product.id);
 
   if (existing && existing.paymentId && existing.qrCode) {
@@ -107,7 +137,7 @@ async function buildPixOrder(userId: string, product: Product) {
     };
   }
 
-  const order = await createOrder({ id: randomUUID(), userId, product });
+  const order = await createOrder({ id: randomUUID(), userId, guildId, product });
   const pix = await createPixPayment(order);
   const updated = await updateOrder(order.id, {
     paymentId: pix.paymentId,
@@ -201,6 +231,53 @@ async function buildLojaReply(requestedPage: number) {
   return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
 }
 
+function buildEditProductOverviewReply(product: Product) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `## ✏️ Editando: ${product.name}\n` +
+        `**Posição:** ${product.position}\n` +
+        `**Preço:** R$ ${formatPrice(product.price)}\n` +
+        `**Descrição:** ${product.description}\n` +
+        `**Mensagem de entrega:** ${product.deliveryMessage}\n` +
+        `**Cargo de entrega:** ${product.deliveryRoleId ? `<@&${product.deliveryRoleId}>` : 'Nenhum'}`
+    )
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`editarproduto:editbtn:${product.id}`)
+        .setLabel('✏️ Editar nome/preço/descrição/entrega/posição')
+        .setStyle(ButtonStyle.Primary)
+    )
+  );
+
+  container.addActionRowComponents(
+    new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+      new RoleSelectMenuBuilder()
+        .setCustomId(`editarproduto:role:${product.id}`)
+        .setPlaceholder(product.deliveryRoleId ? 'Trocar cargo de entrega' : 'Escolher cargo de entrega (opcional)')
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  );
+
+  if (product.deliveryRoleId) {
+    container.addActionRowComponents(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`editarproduto:clearrole:${product.id}`)
+          .setLabel('🗑️ Remover cargo de entrega')
+          .setStyle(ButtonStyle.Danger)
+      )
+    );
+  }
+
+  return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot conectado como ${readyClient.user.tag}`);
 });
@@ -264,7 +341,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const { order, pix, reused } = await buildPixOrder(interaction.user.id, product);
+      const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId ?? undefined, product);
 
       if (!pix.paymentId || !pix.qrCode) {
         await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
@@ -328,8 +405,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // /addproduto
     if (interaction.commandName === 'addproduto') {
-      if (!isGuildOwner(interaction)) {
-        await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
+      if (!(await isStoreModerator(interaction))) {
+        await interaction.reply({ content: 'Você não tem permissão para gerenciar produtos da loja.', flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -339,6 +416,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const priceRaw = interaction.options.getString('preco', true);
       const description = interaction.options.getString('descricao', true);
       const deliveryMessage = interaction.options.getString('entrega', true);
+      const deliveryRole = interaction.options.getRole('cargo') ?? undefined;
       const position = interaction.options.getInteger('posicao') ?? undefined;
 
       const price = parsePrice(priceRaw);
@@ -348,12 +426,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const product = await addProduct({ name, description, price, deliveryMessage, position });
+      const product = await addProduct({
+        name,
+        description,
+        price,
+        deliveryMessage,
+        deliveryRoleId: deliveryRole?.id,
+        position
+      });
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `## ✅ Produto adicionado\n**ID:** \`${product.id}\`\n**Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Descrição:** ${product.description}`
+          `## ✅ Produto adicionado\n**ID:** \`${product.id}\`\n**Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Descrição:** ${product.description}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}`
         )
       );
 
@@ -363,8 +448,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // /editarproduto — mostra a lista de produtos com um menu para escolher qual editar
     if (interaction.commandName === 'editarproduto') {
-      if (!isGuildOwner(interaction)) {
-        await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
+      if (!(await isStoreModerator(interaction))) {
+        await interaction.reply({ content: 'Você não tem permissão para gerenciar produtos da loja.', flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -403,8 +488,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // /removerproduto
     if (interaction.commandName === 'removerproduto') {
-      if (!isGuildOwner(interaction)) {
-        await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
+      if (!(await isStoreModerator(interaction))) {
+        await interaction.reply({ content: 'Você não tem permissão para gerenciar produtos da loja.', flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -431,8 +516,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // /lojaconfig
     if (interaction.commandName === 'lojaconfig') {
-      if (!isGuildOwner(interaction)) {
-        await interaction.reply({ content: 'Apenas o dono do servidor pode usar este comando.', flags: MessageFlags.Ephemeral });
+      if (!(await isStoreAdmin(interaction))) {
+        await interaction.reply({
+          content: 'Apenas o dono do servidor ou o cargo admin da loja pode configurar a loja.',
+          flags: MessageFlags.Ephemeral
+        });
         return;
       }
 
@@ -462,6 +550,53 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       return;
     }
+
+    // /permissoes
+    if (interaction.commandName === 'permissoes') {
+      if (!isGuildOwner(interaction)) {
+        await interaction.reply({
+          content: 'Apenas o dono do servidor pode configurar as permissões da loja (evita que alguém se dê mais acesso sozinho).',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const cargoAdmin = interaction.options.getRole('cargo_admin');
+      const cargoModerador = interaction.options.getRole('cargo_moderador');
+      const removerAdmin = interaction.options.getBoolean('remover_admin') ?? false;
+      const removerModerador = interaction.options.getBoolean('remover_moderador') ?? false;
+
+      const semMudancas = !cargoAdmin && !cargoModerador && !removerAdmin && !removerModerador;
+
+      if (semMudancas) {
+        const current = await getStoreSettings();
+        await interaction.editReply(
+          `## ⚙️ Permissões atuais da loja\n` +
+            `**Cargo admin** (configura a loja + gerencia produtos): ${current.adminRoleId ? `<@&${current.adminRoleId}>` : 'Não definido (só o dono do servidor)'}\n` +
+            `**Cargo moderador** (só gerencia produtos): ${current.moderatorRoleId ? `<@&${current.moderatorRoleId}>` : 'Não definido'}`
+        );
+        return;
+      }
+
+      const updated = await updateStoreSettings({
+        adminRoleId: removerAdmin ? null : cargoAdmin?.id,
+        moderatorRoleId: removerModerador ? null : cargoModerador?.id
+      });
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## ✅ Permissões atualizadas\n` +
+            `**Cargo admin:** ${updated.adminRoleId ? `<@&${updated.adminRoleId}>` : 'Não definido (só o dono do servidor)'}\n` +
+            `**Cargo moderador:** ${updated.moderatorRoleId ? `<@&${updated.moderatorRoleId}>` : 'Não definido'}`
+        )
+      );
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
   } catch (error) {
     console.error('Erro ao processar comando slash:', error);
     await replyError(interaction, error);
@@ -475,6 +610,118 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.customId === 'editarproduto:select') {
       const productId = Number(interaction.values[0]);
+      const product = await findProduct(productId);
+
+      if (!product) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.update(buildEditProductOverviewReply(product));
+    }
+  } catch (error) {
+    console.error('Erro ao processar menu de seleção:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
+    }
+  }
+});
+
+// Menus de seleção de cargo (RoleSelectMenu)
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isRoleSelectMenu()) return;
+
+  try {
+    if (interaction.customId.startsWith('editarproduto:role:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+      const roleId = interaction.values[0];
+
+      const updated = await setProductDeliveryRole(productId, roleId);
+
+      if (!updated) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.update(buildEditProductOverviewReply(updated));
+    }
+  } catch (error) {
+    console.error('Erro ao processar seleção de cargo:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
+    }
+  }
+});
+
+// Modais
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+
+  try {
+    if (interaction.customId.startsWith('editarproduto:modal:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+
+      const name = interaction.fields.getTextInputValue('nome').trim();
+      const priceRaw = interaction.fields.getTextInputValue('preco').trim();
+      const description = interaction.fields.getTextInputValue('descricao').trim();
+      const deliveryMessage = interaction.fields.getTextInputValue('entrega').trim();
+      const positionRaw = interaction.fields.getTextInputValue('posicao').trim();
+
+      const price = parsePrice(priceRaw);
+      if (price === undefined || price <= 0) {
+        await interaction.reply({ content: 'Preço inválido. Use um valor como `9,90`.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const position = Number(positionRaw);
+      if (!Number.isInteger(position) || position < 1) {
+        await interaction.reply({ content: 'Posição inválida. Use um número inteiro a partir de 1.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const updated = await editProduct(productId, { name, price, description, deliveryMessage, position });
+
+      if (!updated) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (interaction.isFromMessage()) {
+        await interaction.update(buildEditProductOverviewReply(updated));
+      } else {
+        await interaction.reply({ components: buildEditProductOverviewReply(updated).components, flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
+      }
+      return;
+    }
+
+    if (interaction.customId === 'loja:jumpmodal') {
+      const raw = interaction.fields.getTextInputValue('pagina').trim();
+      const page = Number(raw);
+      const targetPage = Number.isInteger(page) && page > 0 ? page : 1;
+
+      if (interaction.isFromMessage()) {
+        await interaction.update(await buildLojaReply(targetPage));
+      } else {
+        await interaction.reply({ content: 'Não foi possível atualizar a página.', flags: MessageFlags.Ephemeral });
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao processar modal:', error);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content: toUserErrorMessage(error), components: [] });
+    } else if (!interaction.replied) {
+      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
+    }
+  }
+});
+
+// Botões: navegação da loja, comprar direto da /loja e verificar pagamento
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  try {
+    if (interaction.customId.startsWith('editarproduto:editbtn:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
       const product = await findProduct(productId);
 
       if (!product) {
@@ -537,86 +784,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       await interaction.showModal(modal);
-    }
-  } catch (error) {
-    console.error('Erro ao processar menu de seleção:', error);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
-    }
-  }
-});
-
-// Modais
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isModalSubmit()) return;
-
-  try {
-    if (interaction.customId.startsWith('editarproduto:modal:')) {
-      const productId = Number(interaction.customId.split(':')[2]);
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-      const name = interaction.fields.getTextInputValue('nome').trim();
-      const priceRaw = interaction.fields.getTextInputValue('preco').trim();
-      const description = interaction.fields.getTextInputValue('descricao').trim();
-      const deliveryMessage = interaction.fields.getTextInputValue('entrega').trim();
-      const positionRaw = interaction.fields.getTextInputValue('posicao').trim();
-
-      const price = parsePrice(priceRaw);
-      if (price === undefined || price <= 0) {
-        await interaction.editReply('Preço inválido. Use um valor como `9,90`.');
-        return;
-      }
-
-      const position = Number(positionRaw);
-      if (!Number.isInteger(position) || position < 1) {
-        await interaction.editReply('Posição inválida. Use um número inteiro a partir de 1.');
-        return;
-      }
-
-      const updated = await editProduct(productId, { name, price, description, deliveryMessage, position });
-
-      if (!updated) {
-        await interaction.editReply('Produto não encontrado (pode ter sido removido).');
-        return;
-      }
-
-      const container = new ContainerBuilder();
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          `## ✅ Produto atualizado\n**Posição:** ${updated.position}\n**Nome:** ${updated.name}\n**Preço:** R$ ${formatPrice(updated.price)}\n**Descrição:** ${updated.description}`
-        )
-      );
-
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       return;
     }
 
-    if (interaction.customId === 'loja:jumpmodal') {
-      const raw = interaction.fields.getTextInputValue('pagina').trim();
-      const page = Number(raw);
-      const targetPage = Number.isInteger(page) && page > 0 ? page : 1;
+    if (interaction.customId.startsWith('editarproduto:clearrole:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+      const updated = await setProductDeliveryRole(productId, null);
 
-      if (interaction.isFromMessage()) {
-        await interaction.update(await buildLojaReply(targetPage));
-      } else {
-        await interaction.reply({ content: 'Não foi possível atualizar a página.', flags: MessageFlags.Ephemeral });
+      if (!updated) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
       }
-    }
-  } catch (error) {
-    console.error('Erro ao processar modal:', error);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: toUserErrorMessage(error), components: [] });
-    } else if (!interaction.replied) {
-      await interaction.reply({ content: toUserErrorMessage(error), flags: MessageFlags.Ephemeral });
-    }
-  }
-});
 
-// Botões: navegação da loja, comprar direto da /loja e verificar pagamento
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
+      await interaction.update(buildEditProductOverviewReply(updated));
+      return;
+    }
 
-  try {
     if (interaction.customId.startsWith('loja:page:')) {
       const targetPage = Number(interaction.customId.split(':')[2]);
       await interaction.update(await buildLojaReply(targetPage));
@@ -649,7 +832,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const { order, pix, reused } = await buildPixOrder(interaction.user.id, product);
+      const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId ?? undefined, product);
 
       if (!pix.paymentId || !pix.qrCode) {
         await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
@@ -674,9 +857,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const container = new ContainerBuilder();
 
       if (status === 'approved') {
-        await updateOrder(order.id, { status: 'approved' });
+        const alreadyApproved = order.status === 'approved';
+        const updated = await updateOrder(order.id, { status: 'approved' });
+
+        if (!alreadyApproved) {
+          await deliverOrder(client, updated ?? order);
+        }
+
+        const roleNote = order.product.deliveryRoleId ? '\n🎭 O cargo de acesso foi liberado automaticamente pra você.' : '';
         container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`## ✅ Pagamento aprovado!\n${order.product.deliveryMessage}`)
+          new TextDisplayBuilder().setContent(`## ✅ Pagamento aprovado!\n${order.product.deliveryMessage}${roleNote}`)
         );
       } else {
         container.addTextDisplayComponents(
