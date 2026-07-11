@@ -680,15 +680,34 @@ startHttpServer(client, () => ({
 
 const missingEnv = getMissingRequiredEnv();
 
+async function migrateWithRetry(maxAttempts = 10, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await migrate();
+      console.log('Banco de dados PostgreSQL pronto (tabelas verificadas/criadas).');
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isLastAttempt = attempt === maxAttempts;
+
+      console.error(`Tentativa ${attempt}/${maxAttempts} de conectar ao banco de dados falhou: ${message}`);
+
+      if (isLastAttempt) {
+        console.error(
+          'Não foi possível conectar ao banco de dados após várias tentativas. Verifique DATABASE_URL/DATABASE_PUBLIC_URL. O bot vai continuar rodando, mas comandos que dependem do banco vão falhar até o próximo redeploy.'
+        );
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 if (missingEnv.length > 0) {
   console.error(`Bot iniciado em modo de configuração incompleta. Defina as variáveis no Railway: ${missingEnv.join(', ')}`);
 } else {
-  try {
-    await migrate();
-    console.log('Banco de dados PostgreSQL pronto (tabelas verificadas/criadas).');
-  } catch (error) {
-    console.error('Falha ao conectar/migrar o banco de dados PostgreSQL. Verifique DATABASE_URL/DATABASE_PUBLIC_URL:', error);
-  }
+  await migrateWithRetry();
 
   if (config.autoRegisterCommands) {
     try {
