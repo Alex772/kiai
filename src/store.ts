@@ -2,6 +2,7 @@ import { query } from './db.js';
 import type { Product } from './products.js';
 
 export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type PaymentMethod = 'pix' | 'card';
 
 /** Tempo (em minutos) que um pedido pode ficar pendente sem pagamento antes de expirar automaticamente. */
 export const ORDER_EXPIRATION_MINUTES = 60;
@@ -12,9 +13,11 @@ export type Order = {
   guildId?: string;
   product: Product;
   status: OrderStatus;
+  paymentMethod: PaymentMethod;
   paymentId?: string;
   qrCode?: string;
   qrCodeBase64?: string;
+  checkoutUrl?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -30,9 +33,11 @@ type OrderRow = {
   product_delivery_message: string;
   product_delivery_role_id: string | null;
   status: OrderStatus;
+  payment_method: PaymentMethod;
   payment_id: string | null;
   qr_code: string | null;
   qr_code_base64: string | null;
+  checkout_url: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,9 +56,11 @@ function mapRow(row: OrderRow): Order {
       deliveryRoleId: row.product_delivery_role_id ?? undefined
     },
     status: row.status,
+    paymentMethod: row.payment_method ?? 'pix',
     paymentId: row.payment_id ?? undefined,
     qrCode: row.qr_code ?? undefined,
     qrCodeBase64: row.qr_code_base64 ?? undefined,
+    checkoutUrl: row.checkout_url ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -64,10 +71,11 @@ export async function createOrder(input: {
   userId: string;
   guildId?: string;
   product: Product;
+  paymentMethod: PaymentMethod;
 }): Promise<Order> {
   const rows = await query<OrderRow>(
-    `INSERT INTO orders (id, user_id, guild_id, product_id, product_name, product_description, product_price, product_delivery_message, product_delivery_role_id, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') RETURNING *`,
+    `INSERT INTO orders (id, user_id, guild_id, product_id, product_name, product_description, product_price, product_delivery_message, product_delivery_role_id, payment_method, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING *`,
     [
       input.id,
       input.userId,
@@ -77,7 +85,8 @@ export async function createOrder(input: {
       input.product.description,
       input.product.price,
       input.product.deliveryMessage,
-      input.product.deliveryRoleId ?? null
+      input.product.deliveryRoleId ?? null,
+      input.paymentMethod
     ]
   );
   return mapRow(rows[0]);
@@ -102,29 +111,48 @@ export async function listOrdersByUser(userId: string, limit = 10): Promise<Orde
 }
 
 /**
- * Busca um pedido pendente recente do mesmo usuário para o mesmo produto, dentro da janela de expiração.
- * Usado para evitar gerar múltiplos PIX duplicados quando o usuário clica em "Comprar" mais de uma vez.
+ * Busca um pedido pendente recente do mesmo usuário, produto e forma de pagamento, dentro da
+ * janela de expiração. Usado para evitar gerar cobranças duplicadas quando o usuário clica em
+ * "Comprar" (ou escolhe a mesma forma de pagamento) mais de uma vez.
  */
-export async function findRecentPendingOrder(userId: string, productId: number): Promise<Order | undefined> {
+export async function findRecentPendingOrder(
+  userId: string,
+  productId: number,
+  paymentMethod: PaymentMethod
+): Promise<Order | undefined> {
   const rows = await query<OrderRow>(
     `SELECT * FROM orders
-     WHERE user_id = $1 AND product_id = $2 AND status = 'pending'
-       AND created_at > now() - ($3 || ' minutes')::interval
+     WHERE user_id = $1 AND product_id = $2 AND payment_method = $3 AND status = 'pending'
+       AND created_at > now() - ($4 || ' minutes')::interval
      ORDER BY created_at DESC
      LIMIT 1`,
-    [userId, String(productId), ORDER_EXPIRATION_MINUTES]
+    [userId, String(productId), paymentMethod, ORDER_EXPIRATION_MINUTES]
   );
   return rows[0] ? mapRow(rows[0]) : undefined;
 }
 
 /**
- * Lista todo pedido ainda pendente que já tem um PIX gerado (paymentId presente).
- * Usado pela verificação automática periódica de pagamentos (fallback caso o webhook do
- * Mercado Pago não chegue por algum motivo).
+ * Lista todo pedido PIX ainda pendente que já tem um paymentId (usado pela verificação automática).
  */
 export async function listPendingOrdersWithPayment(): Promise<Order[]> {
   const rows = await query<OrderRow>(
     `SELECT * FROM orders WHERE status = 'pending' AND payment_id IS NOT NULL ORDER BY created_at ASC`
+  );
+  return rows.map(mapRow);
+}
+
+/**
+ * Lista todo pedido de cartão ainda pendente que AINDA NÃO tem um paymentId (o comprador pode não
+ * ter terminado o checkout, ou terminou mas o webhook não chegou). Usado pela verificação
+ * automática pra descobrir, via busca por external_reference, se algum desses já foi pago.
+ */
+export async function listPendingCardOrdersWithoutPayment(): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders
+     WHERE status = 'pending' AND payment_method = 'card' AND payment_id IS NULL
+       AND created_at > now() - ($1 || ' minutes')::interval
+     ORDER BY created_at ASC`,
+    [ORDER_EXPIRATION_MINUTES]
   );
   return rows.map(mapRow);
 }
@@ -145,7 +173,7 @@ export async function cancelExpiredOrders(): Promise<Order[]> {
 
 export async function updateOrder(
   orderId: string,
-  patch: Partial<Pick<Order, 'status' | 'paymentId' | 'qrCode' | 'qrCodeBase64'>>
+  patch: Partial<Pick<Order, 'status' | 'paymentId' | 'qrCode' | 'qrCodeBase64' | 'checkoutUrl'>>
 ): Promise<Order | undefined> {
   const current = await getOrder(orderId);
   if (!current) return undefined;
@@ -153,8 +181,8 @@ export async function updateOrder(
   const updated = { ...current, ...patch };
 
   await query(
-    'UPDATE orders SET status=$2, payment_id=$3, qr_code=$4, qr_code_base64=$5, updated_at=now() WHERE id=$1',
-    [orderId, updated.status, updated.paymentId ?? null, updated.qrCode ?? null, updated.qrCodeBase64 ?? null]
+    'UPDATE orders SET status=$2, payment_id=$3, qr_code=$4, qr_code_base64=$5, checkout_url=$6, updated_at=now() WHERE id=$1',
+    [orderId, updated.status, updated.paymentId ?? null, updated.qrCode ?? null, updated.qrCodeBase64 ?? null, updated.checkoutUrl ?? null]
   );
 
   return updated;

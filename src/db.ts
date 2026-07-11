@@ -77,15 +77,19 @@ export async function migrate() {
         product_delivery_message TEXT NOT NULL,
         product_delivery_role_id TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
+        payment_method TEXT NOT NULL DEFAULT 'pix',
         payment_id TEXT,
         qr_code TEXT,
         qr_code_base64 TEXT,
+        checkout_url TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
     await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS guild_id TEXT;');
     await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_delivery_role_id TEXT;');
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'pix';");
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;');
     await client.query('CREATE INDEX IF NOT EXISTS orders_user_id_idx ON orders (user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS orders_payment_id_idx ON orders (payment_id);');
 

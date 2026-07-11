@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import type { Client } from 'discord.js';
 import { config } from './config.js';
 import { deliverOrder } from './delivery.js';
-import { getPaymentStatus } from './mercadoPago.js';
-import { findOrderByPaymentId, updateOrder } from './store.js';
+import { getPaymentDetails } from './mercadoPago.js';
+import { findOrderByPaymentId, getOrder, updateOrder } from './store.js';
 import { verifyMercadoPagoSignature } from './webhookSecurity.js';
 
 type RuntimeStatus = {
@@ -123,12 +123,18 @@ export function startHttpServer(
         const paymentId = String(body.data && typeof body.data === 'object' ? (body.data as { id?: unknown }).id : body.id);
 
         if (paymentId && paymentId !== 'undefined') {
-          const paymentStatus = await getPaymentStatus(paymentId);
-          const order = await findOrderByPaymentId(paymentId);
+          const details = await getPaymentDetails(paymentId);
 
-          if (order && paymentStatus === 'approved' && order.status !== 'approved') {
-            const updated = await updateOrder(order.id, { status: 'approved' });
+          // Busca primeiro pelo external_reference (= ID do nosso pedido) — funciona tanto para
+          // PIX quanto para cartão. Cai para busca por paymentId só como compatibilidade extra.
+          const order = (details.externalReference && (await getOrder(details.externalReference))) || (await findOrderByPaymentId(paymentId));
+
+          if (order && details.status === 'approved' && order.status !== 'approved') {
+            const updated = await updateOrder(order.id, { status: 'approved', paymentId });
             await deliverOrder(client, updated ?? order);
+          } else if (order && !order.paymentId) {
+            // Guarda o paymentId assim que descobrimos (útil para /pedido e a verificação automática).
+            await updateOrder(order.id, { paymentId });
           }
         }
 
@@ -139,6 +145,34 @@ export function startHttpServer(
         response.writeHead(500, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: 'webhook_failed' }));
       }
+      return;
+    }
+
+    if (request.method === 'GET' && request.url?.startsWith('/checkout/return')) {
+      const url = new URL(request.url, 'http://internal');
+      const status = url.searchParams.get('status') ?? 'pending';
+
+      const messages: Record<string, string> = {
+        success: '✅ Pagamento recebido! Pode fechar esta aba e voltar ao Discord — a entrega é liberada automaticamente em instantes.',
+        pending: '⏳ Pagamento em processamento. Pode fechar esta aba e voltar ao Discord — avisamos assim que for aprovado.',
+        failure: '❌ Não foi possível concluir o pagamento. Pode fechar esta aba e tentar novamente pelo Discord.'
+      };
+
+      const message = messages[status] ?? messages.pending;
+
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(`<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pagamento</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #1e1f22; color: #f2f3f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; text-align: center; }
+  .card { max-width: 420px; }
+  p { font-size: 1.1rem; line-height: 1.5; }
+</style>
+</head>
+<body><div class="card"><p>${message}</p></div></body>
+</html>`);
       return;
     }
 

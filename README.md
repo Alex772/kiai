@@ -5,7 +5,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 ## Funcionalidades
 
 - `/loja`: mostra os produtos com paginação (botões Anterior/Próxima e um botão "Página X/Y" que abre um campo pra digitar a página desejada) e botão "Comprar" em cada um.
-- `/comprar`: cria um pedido e gera PIX (código copia-e-cola + imagem do QR Code) pelo Mercado Pago.
+- `/comprar`: mostra a escolha entre PIX e cartão de crédito/débito, depois cria o pedido e gera o pagamento na forma escolhida.
 - `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, cargo de entrega, datas).
 - `/pedidos`: lista os últimos pedidos do usuário.
 - `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; você pode escolher a posição na lista e um cargo do Discord pra entregar automaticamente).
@@ -50,6 +50,19 @@ Cada produto pode ter um cargo do Discord vinculado, entregue automaticamente as
 2. Ter o cargo do bot posicionado **acima**, na lista de cargos do servidor, do cargo que ele vai entregar (regra do próprio Discord — um bot nunca pode atribuir um cargo mais alto que o dele).
 
 Se a atribuição falhar (permissão faltando, hierarquia errada, etc.), o bot não trava a compra: a mensagem de entrega em texto ainda é enviada por DM, com um aviso pedindo pra um administrador liberar o cargo manualmente, e o erro completo fica no log do Railway.
+
+## Pagamento com cartão de crédito/débito
+
+Ao clicar em "Comprar" (pela `/loja` ou `/comprar`), a pessoa escolhe entre **PIX** ou **Cartão de crédito/débito**.
+
+Para cartão, o bot **nunca coleta número de cartão, CVV ou validade** — isso seria um risco sério de segurança (PCI-DSS) e o bot não faz isso de propósito. Em vez disso, ele gera um link do **Checkout Pro** do Mercado Pago: uma página segura hospedada pelo próprio Mercado Pago, onde a pessoa digita os dados do cartão. O bot só recebe a confirmação de aprovado ou não, do mesmo jeito que já acontece com o PIX (webhook + verificação automática).
+
+Diferenças em relação ao PIX:
+- Não existe QR Code — o botão "Abrir pagamento seguro" leva direto pra página do Mercado Pago.
+- O ID do pagamento só é conhecido depois que a pessoa termina o checkout (não na hora de gerar o link), então o bot usa uma busca por `external_reference` pra descobrir e confirmar o pagamento — tanto no webhook quanto na verificação automática periódica.
+- Parcelamento, bandeiras aceitas e taxas seguem as regras normais da conta Mercado Pago conectada; o bot não interfere nisso.
+
+Isso exige `PUBLIC_BASE_URL` configurado (mesma variável já usada pelo webhook do PIX) — sem ela, o botão "Cartão" ainda aparece, mas a criação do link falha com um aviso claro pedindo pra configurar a variável.
 
 ## Logs
 

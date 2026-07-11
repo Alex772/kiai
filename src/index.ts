@@ -29,7 +29,13 @@ import { deliverOrder } from './delivery.js';
 import { toUserErrorMessage } from './errors.js';
 import { formatPrice, parsePrice } from './format.js';
 import { diffFields, logAdmin, logSale, LOG_COLOR } from './logging.js';
-import { createPixPayment, getPaymentStatus } from './mercadoPago.js';
+import {
+  createPixPayment,
+  createCardCheckoutLink,
+  resolveOrderPaymentStatus,
+  getPaymentDetails,
+  searchPaymentByExternalReference
+} from './mercadoPago.js';
 import {
   addProduct,
   countProducts,
@@ -46,6 +52,7 @@ import {
   findRecentPendingOrder,
   cancelExpiredOrders,
   listPendingOrdersWithPayment,
+  listPendingCardOrdersWithoutPayment,
   getOrder,
   listOrdersByUser,
   updateOrder,
@@ -118,6 +125,7 @@ function orderDetailContent(order: Order) {
     `**ID:** \`${order.id}\``,
     `**Produto:** ${order.product.name}`,
     `**Valor:** R$ ${formatPrice(order.product.price)}`,
+    `**Forma de pagamento:** ${order.paymentMethod === 'pix' ? '💠 PIX' : '💳 Cartão'}`,
     `**Status:** ${STATUS_LABEL[order.status]}`,
     order.product.deliveryRoleId ? `**Cargo de entrega:** <@&${order.product.deliveryRoleId}>` : undefined,
     order.paymentId ? `**ID do pagamento (Mercado Pago):** \`${order.paymentId}\`` : undefined,
@@ -128,8 +136,28 @@ function orderDetailContent(order: Order) {
   return lines.join('\n');
 }
 
+function buildPaymentMethodChoiceReply(product: Product) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `## ${product.name}\n${product.description}\n\n**Valor:** R$ ${formatPrice(product.price)}\n\nComo você quer pagar?`
+    )
+  );
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`pagarpix:${product.id}`).setLabel('💠 PIX').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`pagarcartao:${product.id}`)
+        .setLabel('💳 Cartão de crédito/débito')
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+
+  return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
+}
+
 async function buildPixOrder(userId: string, guildId: string | undefined, product: Product) {
-  const existing = await findRecentPendingOrder(userId, product.id);
+  const existing = await findRecentPendingOrder(userId, product.id, 'pix');
 
   if (existing && existing.paymentId && existing.qrCode) {
     return {
@@ -139,7 +167,7 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
     };
   }
 
-  const order = await createOrder({ id: randomUUID(), userId, guildId, product });
+  const order = await createOrder({ id: randomUUID(), userId, guildId, product, paymentMethod: 'pix' });
   const pix = await createPixPayment(order);
   const updated = await updateOrder(order.id, {
     paymentId: pix.paymentId,
@@ -148,7 +176,7 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
   });
 
   await logSale(client, {
-    title: '🛒 Pedido criado',
+    title: '🛒 Pedido criado (PIX)',
     description:
       `**Comprador:** <@${userId}> (\`${userId}\`)\n**Produto:** ${product.name}\n**Valor:** R$ ${formatPrice(product.price)}\n**Pedido:** \`${order.id}\``,
     color: LOG_COLOR.created
@@ -157,10 +185,31 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
   return { order: updated ?? order, pix, reused: false };
 }
 
+async function buildCardOrder(userId: string, guildId: string | undefined, product: Product) {
+  const existing = await findRecentPendingOrder(userId, product.id, 'card');
+
+  if (existing && existing.checkoutUrl) {
+    return { order: existing, checkoutUrl: existing.checkoutUrl, reused: true };
+  }
+
+  const order = await createOrder({ id: randomUUID(), userId, guildId, product, paymentMethod: 'card' });
+  const { checkoutUrl } = await createCardCheckoutLink(order);
+  const updated = await updateOrder(order.id, { checkoutUrl });
+
+  await logSale(client, {
+    title: '🛒 Pedido criado (Cartão)',
+    description:
+      `**Comprador:** <@${userId}> (\`${userId}\`)\n**Produto:** ${product.name}\n**Valor:** R$ ${formatPrice(product.price)}\n**Pedido:** \`${order.id}\``,
+    color: LOG_COLOR.created
+  });
+
+  return { order: updated ?? order, checkoutUrl, reused: false };
+}
+
 function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64?: string }, reused = false) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 💸 Pagamento PIX — ${order.product.name}`)
+    new TextDisplayBuilder().setContent(`## 💠 Pagamento PIX — ${order.product.name}`)
   );
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
   container.addTextDisplayComponents(
@@ -200,6 +249,34 @@ function buildPixPaymentReply(order: Order, pix: { qrCode?: string; qrCodeBase64
     files,
     flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2
   };
+}
+
+function buildCardPaymentReply(order: Order, checkoutUrl: string, reused = false) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## 💳 Pagamento com cartão — ${order.product.name}`)
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\n` +
+        `${reused ? 'Você já tinha um pagamento em aberto para este produto — aqui está o link de novo.' : 'Clique no botão abaixo para pagar com cartão de crédito ou débito numa página segura do Mercado Pago.'} ` +
+        `Seus dados de cartão nunca passam pelo Discord ou pelo bot. O bot avisará por DM quando o pagamento for aprovado.`
+    )
+  );
+
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setLabel('Abrir pagamento seguro').setStyle(ButtonStyle.Link).setURL(checkoutUrl)
+    )
+  );
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
+    )
+  );
+
+  return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
 }
 
 async function buildLojaReply(requestedPage: number) {
@@ -351,14 +428,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId ?? undefined, product);
-
-      if (!pix.paymentId || !pix.qrCode) {
-        await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
-        return;
-      }
-
-      await interaction.editReply(buildPixPaymentReply(order, pix, reused));
+      await interaction.editReply(buildPaymentMethodChoiceReply(product));
       return;
     }
 
@@ -376,7 +446,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(orderDetailContent(order)));
 
-      if ((order.status === 'pending' || order.status === 'cancelled') && order.paymentId) {
+      if (order.status === 'pending' || order.status === 'cancelled') {
         container.addActionRowComponents(
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`check:${order.id}`).setLabel('Verificar pagamento').setStyle(ButtonStyle.Success)
@@ -403,7 +473,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const order of orders) {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `**${order.product.name}** — R$ ${formatPrice(order.product.price)} — ${STATUS_LABEL[order.status]}\n\`${order.id}\` • ${formatDate(order.createdAt)}`
+              `**${order.product.name}** — R$ ${formatPrice(order.product.price)} — ${order.paymentMethod === 'pix' ? '💠' : '💳'} — ${STATUS_LABEL[order.status]}\n\`${order.id}\` • ${formatDate(order.createdAt)}`
             )
           );
         }
@@ -984,6 +1054,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      await interaction.editReply(buildPaymentMethodChoiceReply(product));
+      return;
+    }
+
+    if (interaction.customId.startsWith('pagarpix:')) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const productId = Number(interaction.customId.replace('pagarpix:', ''));
+      const product = await findProduct(productId);
+
+      if (!product) {
+        await interaction.editReply('Produto não encontrado (pode ter sido removido).');
+        return;
+      }
+
       const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId ?? undefined, product);
 
       if (!pix.paymentId || !pix.qrCode) {
@@ -995,22 +1079,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.customId.startsWith('pagarcartao:')) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const productId = Number(interaction.customId.replace('pagarcartao:', ''));
+      const product = await findProduct(productId);
+
+      if (!product) {
+        await interaction.editReply('Produto não encontrado (pode ter sido removido).');
+        return;
+      }
+
+      const { order, checkoutUrl, reused } = await buildCardOrder(interaction.user.id, interaction.guildId ?? undefined, product);
+
+      if (!checkoutUrl) {
+        await interaction.editReply(
+          'Não foi possível gerar o link de pagamento com cartão. Verifique se `PUBLIC_BASE_URL` está configurado, ou tente novamente em alguns minutos.'
+        );
+        return;
+      }
+
+      await interaction.editReply(buildCardPaymentReply(order, checkoutUrl, reused));
+      return;
+    }
+
     if (interaction.customId.startsWith('check:')) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const orderId = interaction.customId.replace('check:', '');
       const order = await getOrder(orderId);
 
-      if (!order || order.userId !== interaction.user.id || !order.paymentId) {
+      if (!order || order.userId !== interaction.user.id) {
         await interaction.editReply('Pedido não encontrado para sua conta.');
         return;
       }
 
-      const status = await getPaymentStatus(order.paymentId);
+      const { status, paymentId } = await resolveOrderPaymentStatus(order);
       const container = new ContainerBuilder();
 
       if (status === 'approved') {
         const alreadyApproved = order.status === 'approved';
-        const updated = await updateOrder(order.id, { status: 'approved' });
+        const updated = await updateOrder(order.id, { status: 'approved', paymentId: paymentId ?? order.paymentId });
 
         if (!alreadyApproved) {
           await deliverOrder(client, updated ?? order);
@@ -1021,9 +1128,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new TextDisplayBuilder().setContent(`## ✅ Pagamento aprovado!\n${order.product.deliveryMessage}${roleNote}`)
         );
       } else {
+        if (paymentId && paymentId !== order.paymentId) {
+          await updateOrder(order.id, { paymentId });
+        }
+
         container.addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## ⏳ Pagamento pendente\nStatus atual no Mercado Pago: **${status ?? 'desconhecido'}**`
+            `## ⏳ Pagamento pendente\nStatus atual no Mercado Pago: **${status ?? 'ainda não iniciado'}**`
           )
         );
       }
@@ -1105,7 +1216,7 @@ async function pollPendingPaymentsJob() {
       if (!order.paymentId) continue;
 
       try {
-        const status = await getPaymentStatus(order.paymentId);
+        const status = await getPaymentDetails(order.paymentId).then((d) => d.status);
 
         if (status === 'approved') {
           const updated = await updateOrder(order.id, { status: 'approved' });
@@ -1116,6 +1227,27 @@ async function pollPendingPaymentsJob() {
         }
       } catch (error) {
         console.error(`Falha ao verificar automaticamente o pagamento do pedido ${order.id}:`, error);
+      }
+    }
+
+    // Pedidos de cartão ainda não têm paymentId até o comprador terminar o checkout — busca por
+    // external_reference pra descobrir se algum já foi pago, mesmo sem o webhook ter avisado.
+    const pendingCard = await listPendingCardOrdersWithoutPayment();
+
+    for (const order of pendingCard) {
+      try {
+        const found = await searchPaymentByExternalReference(order.id);
+        if (!found) continue;
+
+        if (found.status === 'approved') {
+          const updated = await updateOrder(order.id, { status: 'approved', paymentId: found.id });
+          await deliverOrder(client, updated ?? order);
+          console.log(`Pedido ${order.id} (cartão) aprovado detectado pela verificação automática.`);
+        } else {
+          await updateOrder(order.id, { paymentId: found.id });
+        }
+      } catch (error) {
+        console.error(`Falha ao verificar automaticamente o pagamento (cartão) do pedido ${order.id}:`, error);
       }
     }
   } catch (error) {
