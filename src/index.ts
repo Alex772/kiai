@@ -81,7 +81,7 @@ async function replyError(interaction: ChatInputCommandInteraction | ButtonInter
     console.error('Falha ao enviar resposta de erro:', err);
   }
 }
- 
+
 function isGuildOwner(interaction: ChatInputCommandInteraction): boolean {
   if (interaction.guild?.ownerId === interaction.user.id) return true;
   if (config.adminRoleId && interaction.inCachedGuild()) {

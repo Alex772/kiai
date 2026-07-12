@@ -107,9 +107,6 @@ export async function createCardCheckoutLink(order: Order): Promise<{ checkoutUr
         ],
         external_reference: order.id,
         notification_url: notificationUrl,
-        payer: {
-          email: resolvePayerEmail(order.userId)
-        },
         payment_methods: {
           excluded_payment_types: [{ id: 'ticket' }, { id: 'bank_transfer' }, { id: 'atm' }]
         },
