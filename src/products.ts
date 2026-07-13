@@ -1,4 +1,5 @@
 import { pool, query } from './db.js';
+import type { Duration } from './duration.js';
 
 export type Product = {
   id: number;
@@ -8,6 +9,8 @@ export type Product = {
   deliveryMessage: string;
   /** Cargo do Discord entregue automaticamente ao aprovar o pagamento (opcional). */
   deliveryRoleId?: string;
+  /** Por quanto tempo o cargo fica ativo antes de ser removido automaticamente. Sem isso, é permanente. */
+  deliveryRoleDuration?: Duration;
   position?: number;
 };
 
@@ -17,6 +20,7 @@ export type ProductInput = {
   price: number;
   deliveryMessage: string;
   deliveryRoleId?: string;
+  deliveryRoleDuration?: Duration;
   /** Posição desejada na lista (1 = primeiro). Se omitido, entra no final. */
   position?: number;
 };
@@ -37,6 +41,8 @@ type ProductRow = {
   price: string;
   delivery_message: string;
   delivery_role_id: string | null;
+  delivery_role_duration_amount: number | null;
+  delivery_role_duration_unit: string | null;
   position: number;
 };
 
@@ -48,6 +54,10 @@ function mapRow(row: ProductRow): Product {
     price: Number(row.price),
     deliveryMessage: row.delivery_message,
     deliveryRoleId: row.delivery_role_id ?? undefined,
+    deliveryRoleDuration:
+      row.delivery_role_duration_amount && row.delivery_role_duration_unit
+        ? { amount: row.delivery_role_duration_amount, unit: row.delivery_role_duration_unit as Duration['unit'] }
+        : undefined,
     position: row.position
   };
 }
@@ -81,9 +91,18 @@ export async function addProduct(input: ProductInput): Promise<Product> {
     await client.query('UPDATE products SET position = position + 1 WHERE position >= $1', [targetPosition]);
 
     const { rows } = await client.query<ProductRow>(
-      `INSERT INTO products (name, description, price, delivery_message, delivery_role_id, position)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [input.name, input.description, input.price, input.deliveryMessage, input.deliveryRoleId ?? null, targetPosition]
+      `INSERT INTO products (name, description, price, delivery_message, delivery_role_id, delivery_role_duration_amount, delivery_role_duration_unit, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [
+        input.name,
+        input.description,
+        input.price,
+        input.deliveryMessage,
+        input.deliveryRoleId ?? null,
+        input.deliveryRoleDuration?.amount ?? null,
+        input.deliveryRoleDuration?.unit ?? null,
+        targetPosition
+      ]
     );
 
     await client.query('COMMIT');
@@ -194,6 +213,21 @@ export async function setProductDeliveryRole(productId: number, roleId: string |
   const rows = await query<ProductRow>(
     'UPDATE products SET delivery_role_id = $2, updated_at = now() WHERE id = $1 RETURNING *',
     [productId, roleId]
+  );
+  return rows[0] ? mapRow(rows[0]) : undefined;
+}
+
+/**
+ * Define (ou remove, passando null) por quanto tempo o cargo de entrega desse produto fica ativo
+ * antes de ser removido automaticamente. Sem duração definida, o cargo é permanente.
+ */
+export async function setProductDeliveryRoleDuration(
+  productId: number,
+  duration: Duration | null
+): Promise<Product | undefined> {
+  const rows = await query<ProductRow>(
+    'UPDATE products SET delivery_role_duration_amount = $2, delivery_role_duration_unit = $3, updated_at = now() WHERE id = $1 RETURNING *',
+    [productId, duration?.amount ?? null, duration?.unit ?? null]
   );
   return rows[0] ? mapRow(rows[0]) : undefined;
 }

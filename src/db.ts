@@ -90,8 +90,13 @@ export async function migrate() {
     await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_delivery_role_id TEXT;');
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'pix';");
     await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;');
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_delivery_role_duration_amount INTEGER;');
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_delivery_role_duration_unit TEXT;');
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS role_expires_at TIMESTAMPTZ;');
+    await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS role_removed_at TIMESTAMPTZ;');
     await client.query('CREATE INDEX IF NOT EXISTS orders_user_id_idx ON orders (user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS orders_payment_id_idx ON orders (payment_id);');
+    await client.query('CREATE INDEX IF NOT EXISTS orders_role_expires_at_idx ON orders (role_expires_at);');
 
     const { rows: columnRows } = await client.query<{ column_name: string; data_type: string }>(
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'products'`
@@ -155,6 +160,8 @@ export async function migrate() {
     }
 
     await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_id TEXT;');
+    await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_duration_amount INTEGER;');
+    await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_duration_unit TEXT;');
     await client.query('CREATE INDEX IF NOT EXISTS products_position_idx ON products (position);');
 
     await client.query(`

@@ -1,7 +1,8 @@
 import type { Client } from 'discord.js';
+import { addDurationToDate, formatDuration, formatRemaining } from './duration.js';
 import { formatPrice } from './format.js';
 import { logAdmin, logSale, LOG_COLOR } from './logging.js';
-import type { Order } from './store.js';
+import { updateOrder, type Order } from './store.js';
 
 export type DeliveryResult = {
   roleGranted: boolean;
@@ -11,12 +12,14 @@ export type DeliveryResult = {
 
 /**
  * Executa a entrega de um pedido aprovado: atribui o cargo do Discord configurado no produto
- * (se houver) e envia a mensagem de entrega por DM ao comprador. Nunca lança exceção — falhas
- * são registradas no log e refletidas no retorno, para não travar o fluxo de aprovação do pagamento.
+ * (se houver, com prazo de expiração se configurado) e envia a mensagem de entrega por DM ao
+ * comprador. Nunca lança exceção — falhas são registradas no log e refletidas no retorno, para
+ * não travar o fluxo de aprovação do pagamento.
  */
 export async function deliverOrder(client: Client, order: Order): Promise<DeliveryResult> {
   let roleGranted = false;
   const roleAttempted = Boolean(order.guildId && order.product.deliveryRoleId);
+  let roleExpiresAt: Date | undefined;
 
   if (order.guildId && order.product.deliveryRoleId) {
     try {
@@ -24,6 +27,11 @@ export async function deliverOrder(client: Client, order: Order): Promise<Delive
       const member = await guild.members.fetch(order.userId);
       await member.roles.add(order.product.deliveryRoleId, `Compra aprovada — pedido ${order.id}`);
       roleGranted = true;
+
+      if (order.product.deliveryRoleDuration) {
+        roleExpiresAt = addDurationToDate(new Date(), order.product.deliveryRoleDuration);
+        await updateOrder(order.id, { roleExpiresAt: roleExpiresAt.toISOString() });
+      }
     } catch (error) {
       console.error(
         `Falha ao atribuir o cargo de entrega (${order.product.deliveryRoleId}) do pedido ${order.id} para o usuário ${order.userId}:`,
@@ -50,7 +58,9 @@ export async function deliverOrder(client: Client, order: Order): Promise<Delive
     const roleNote = !order.product.deliveryRoleId
       ? ''
       : roleGranted
-        ? '\n\n🎭 O cargo de acesso foi liberado automaticamente pra você no servidor.'
+        ? roleExpiresAt
+          ? `\n\n🎭 O cargo de acesso foi liberado por ${formatDuration(order.product.deliveryRoleDuration!)} (até ${roleExpiresAt.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}).`
+          : '\n\n🎭 O cargo de acesso foi liberado automaticamente pra você no servidor (sem prazo de validade).'
         : '\n\n⚠️ Não consegui atribuir o cargo automaticamente — avise um administrador do servidor pra liberar manualmente.';
 
     await user.send(`✅ Pagamento aprovado para **${order.product.name}**.\n${order.product.deliveryMessage}${roleNote}`);
@@ -64,7 +74,10 @@ export async function deliverOrder(client: Client, order: Order): Promise<Delive
     description:
       `**Comprador:** <@${order.userId}> (\`${order.userId}\`)\n**Produto:** ${order.product.name}\n` +
       `**Valor:** R$ ${formatPrice(order.product.price)}\n**Pedido:** \`${order.id}\`\n**ID pagamento (Mercado Pago):** \`${order.paymentId ?? '—'}\`` +
-      (order.product.deliveryRoleId ? `\n**Cargo entregue:** ${roleGranted ? '✅ Sim' : '❌ Não (verifique o log admin)'}` : ''),
+      (order.product.deliveryRoleId
+        ? `\n**Cargo entregue:** ${roleGranted ? '✅ Sim' : '❌ Não (verifique o log admin)'}` +
+          (roleExpiresAt ? `\n**Cargo expira em:** ${formatRemaining(roleExpiresAt)}` : '')
+        : ''),
     color: LOG_COLOR.approved
   });
 

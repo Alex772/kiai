@@ -35,6 +35,13 @@ export const commands = [
     .addRoleOption((o) =>
       o.setName('cargo').setDescription('Cargo do Discord entregue automaticamente ao aprovar o pagamento (opcional)').setRequired(false)
     )
+    .addStringOption((o) =>
+      o
+        .setName('duracao_cargo')
+        .setDescription('Por quanto tempo o cargo fica ativo (ex: 30 dias, 1 mes, 1 ano). Só funciona junto com "cargo". Vazio = permanente.')
+        .setRequired(false)
+        .setMaxLength(30)
+    )
     .addIntegerOption((o) =>
       o.setName('posicao').setDescription('Posição na loja (opcional; padrão: final da lista)').setRequired(false).setMinValue(1)
     ),
@@ -49,6 +56,15 @@ export const commands = [
     .addStringOption((o) =>
       o.setName('produto').setDescription('Produto a remover').setRequired(true).setAutocomplete(true)
     ),
+
+  new SlashCommandBuilder()
+    .setName('meusbeneficios')
+    .setDescription('Mostra seus cargos/benefícios ativos e quanto tempo falta pra cada um expirar.'),
+
+  new SlashCommandBuilder()
+    .setName('usuario')
+    .setDescription('Consulta o histórico de compras e benefícios ativos de um usuário. (Dono do servidor ou cargo autorizado)')
+    .addUserOption((o) => o.setName('usuario').setDescription('Usuário a consultar').setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('lojaconfig')

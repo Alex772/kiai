@@ -8,8 +8,10 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/comprar`: mostra a escolha entre PIX e cartão de crédito/débito, depois cria o pedido e gera o pagamento na forma escolhida.
 - `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, cargo de entrega, datas).
 - `/pedidos`: lista os últimos pedidos do usuário.
-- `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; você pode escolher a posição na lista e um cargo do Discord pra entregar automaticamente).
-- `/editarproduto`: mostra a lista de produtos num menu — ao escolher um, abre uma tela com todos os dados do produto, um botão pra editar nome/preço/descrição/entrega/posição (via formulário) e um seletor de cargo pra definir ou trocar o cargo de entrega automática.
+- `/meusbeneficios`: mostra seus cargos ativos e o tempo restante até cada um expirar.
+- `/usuario` (moderador/admin): consulta o histórico de pedidos e os benefícios ativos de qualquer pessoa.
+- `/addproduto`: adiciona um produto (ID é gerado automaticamente pelo banco; você pode escolher a posição na lista, um cargo do Discord pra entregar automaticamente, e por quanto tempo esse cargo fica ativo).
+- `/editarproduto`: mostra a lista de produtos num menu — ao escolher um, abre uma tela com todos os dados do produto, um botão pra editar nome/preço/descrição/entrega/posição (via formulário), um seletor de cargo, e um botão pra definir a duração do cargo (temporário ou permanente).
 - `/removerproduto`: remove um produto da loja (os produtos seguintes reordenam automaticamente pra fechar o espaço).
 - `/lojaconfig`: configura título, descrição e quantidade de itens por página da loja. Sem argumentos, mostra a configuração atual.
 - `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
@@ -51,6 +53,20 @@ Cada produto pode ter um cargo do Discord vinculado, entregue automaticamente as
 
 Se a atribuição falhar (permissão faltando, hierarquia errada, etc.), o bot não trava a compra: a mensagem de entrega em texto ainda é enviada por DM, com um aviso pedindo pra um administrador liberar o cargo manualmente, e o erro completo fica no log do Railway.
 
+## Cargo temporário (expiração automática)
+
+Cargos de entrega podem ter prazo de validade — ideal pra assinaturas tipo "VIP por 30 dias".
+
+- Ao criar: use `duracao_cargo` em `/addproduto` junto com `cargo` (ex: `30 dias`, `1 mes`, `1 ano`, `12 horas`).
+- Em um produto já existente: `/editarproduto` → escolha o produto → botão "⏱️ Definir duração do cargo". Deixe o campo vazio pra tornar permanente de novo.
+- Formatos aceitos: `<número> <unidade>`, com ou sem espaço — `minuto(s)`, `hora(s)`, `dia(s)`, `semana(s)`, `mes(es)`, `ano(s)`. Ex: `7dias`, `2 semanas`, `1mes`, `1 ano`.
+
+O prazo começa a contar **a partir do momento em que o cargo é entregue** (pagamento aprovado), não da criação do pedido. A cada 5 minutos, o bot verifica quem já passou do prazo, remove o cargo automaticamente, avisa a pessoa por DM, e registra o evento nos dois canais de log (`/logs`).
+
+Comandos relacionados:
+- `/meusbeneficios` — qualquer usuário vê os próprios cargos ativos e quanto tempo falta pra cada um.
+- `/usuario` (moderador/admin) — consulta o histórico de pedidos e os benefícios ativos de qualquer pessoa do servidor.
+
 ## Pagamento com cartão de crédito/débito
 
 Ao clicar em "Comprar" (pela `/loja` ou `/comprar`), a pessoa escolhe entre **PIX** ou **Cartão de crédito/débito**.
@@ -63,6 +79,8 @@ Diferenças em relação ao PIX:
 - Parcelamento, bandeiras aceitas e taxas seguem as regras normais da conta Mercado Pago conectada; o bot não interfere nisso.
 
 Isso exige `PUBLIC_BASE_URL` configurado (mesma variável já usada pelo webhook do PIX) — sem ela, o botão "Cartão" ainda aparece, mas a criação do link falha com um aviso claro pedindo pra configurar a variável.
+
+**Atenção:** nos testes, o Checkout Pro não ofereceu a opção de "pagar como convidado" — pediu login/cadastro Mercado Pago mesmo pra quem nunca teve conta. O bot já avisa isso no texto pro comprador ("requer conta Mercado Pago"). Isso é uma configuração/comportamento da conta Mercado Pago conectada, não algo controlável pela nossa integração — se quiser investigar, veja em "Seu negócio → Configurações → Checkouts" no painel do Mercado Pago, ou fale com o suporte deles. O PIX não tem essa limitação.
 
 ## Logs
 

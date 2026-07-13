@@ -26,6 +26,7 @@ import {
 } from 'discord.js';
 import { config, getMissingRequiredEnv } from './config.js';
 import { deliverOrder } from './delivery.js';
+import { addDurationToDate, formatDuration, formatRemaining, parseDuration } from './duration.js';
 import { toUserErrorMessage } from './errors.js';
 import { formatPrice, parsePrice } from './format.js';
 import { diffFields, logAdmin, logSale, LOG_COLOR } from './logging.js';
@@ -44,6 +45,7 @@ import {
   listProducts,
   removeProduct,
   setProductDeliveryRole,
+  setProductDeliveryRoleDuration,
   type Product
 } from './products.js';
 import { getStoreSettings, updateStoreSettings } from './settings.js';
@@ -53,6 +55,8 @@ import {
   cancelExpiredOrders,
   listPendingOrdersWithPayment,
   listPendingCardOrdersWithoutPayment,
+  listExpiredRoleGrants,
+  listActiveRoleGrantsForUser,
   getOrder,
   listOrdersByUser,
   updateOrder,
@@ -136,11 +140,28 @@ function orderDetailContent(order: Order) {
   return lines.join('\n');
 }
 
+function benefitsSectionContent(title: string, grants: Order[]) {
+  if (grants.length === 0) {
+    return new TextDisplayBuilder().setContent(`${title}\nNenhum benefício ativo no momento.`);
+  }
+
+  const lines = grants.map((order) => {
+    const roleMention = order.product.deliveryRoleId ? `<@&${order.product.deliveryRoleId}>` : order.product.name;
+    if (!order.roleExpiresAt) {
+      return `${roleMention} — **permanente** (\`${order.id}\`)`;
+    }
+    const expiresAt = new Date(order.roleExpiresAt);
+    return `${roleMention} — expira em **${formatRemaining(expiresAt)}** (${formatDate(order.roleExpiresAt)}) — \`${order.id}\``;
+  });
+
+  return new TextDisplayBuilder().setContent(`${title}\n${lines.join('\n')}`);
+}
+
 function buildPaymentMethodChoiceReply(product: Product) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `## ${product.name}\n${product.description}\n\n**Valor:** R$ ${formatPrice(product.price)}\n\nComo você quer pagar?`
+      `## ${product.name}\n${product.description}\n\n**Valor:** R$ ${formatPrice(product.price)}\n\nComo você quer pagar?\n-# 💳 O pagamento por cartão atualmente exige entrar ou criar uma conta Mercado Pago na hora de pagar.`
     )
   );
   container.addActionRowComponents(
@@ -148,7 +169,7 @@ function buildPaymentMethodChoiceReply(product: Product) {
       new ButtonBuilder().setCustomId(`pagarpix:${product.id}`).setLabel('💠 PIX').setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`pagarcartao:${product.id}`)
-        .setLabel('💳 Cartão de crédito/débito')
+        .setLabel('💳 Cartão (requer conta Mercado Pago)')
         .setStyle(ButtonStyle.Secondary)
     )
   );
@@ -261,7 +282,8 @@ function buildCardPaymentReply(order: Order, checkoutUrl: string, reused = false
     new TextDisplayBuilder().setContent(
       `**Pedido:** \`${order.id}\`\n**Valor:** R$ ${formatPrice(order.product.price)}\n\n` +
         `${reused ? 'Você já tinha um pagamento em aberto para este produto — aqui está o link de novo.' : 'Clique no botão abaixo para pagar com cartão de crédito ou débito numa página segura do Mercado Pago.'} ` +
-        `Seus dados de cartão nunca passam pelo Discord ou pelo bot. O bot avisará por DM quando o pagamento for aprovado.`
+        `Seus dados de cartão nunca passam pelo Discord ou pelo bot.\n\n` +
+        `⚠️ **Atualmente é necessário entrar ou criar uma conta Mercado Pago** para concluir o pagamento com cartão (é rápido e gratuito). O bot avisará por DM quando o pagamento for aprovado.`
     )
   );
 
@@ -327,7 +349,8 @@ function buildEditProductOverviewReply(product: Product) {
         `**Preço:** R$ ${formatPrice(product.price)}\n` +
         `**Descrição:** ${product.description}\n` +
         `**Mensagem de entrega:** ${product.deliveryMessage}\n` +
-        `**Cargo de entrega:** ${product.deliveryRoleId ? `<@&${product.deliveryRoleId}>` : 'Nenhum'}`
+        `**Cargo de entrega:** ${product.deliveryRoleId ? `<@&${product.deliveryRoleId}>` : 'Nenhum'}\n` +
+        `**Duração do cargo:** ${product.deliveryRoleId ? (product.deliveryRoleDuration ? formatDuration(product.deliveryRoleDuration) : 'Permanente') : '—'}`
     )
   );
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
@@ -352,14 +375,17 @@ function buildEditProductOverviewReply(product: Product) {
   );
 
   if (product.deliveryRoleId) {
-    container.addActionRowComponents(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`editarproduto:clearrole:${product.id}`)
-          .setLabel('🗑️ Remover cargo de entrega')
-          .setStyle(ButtonStyle.Danger)
-      )
+    const roleButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`editarproduto:duration:${product.id}`)
+        .setLabel('⏱️ Definir duração do cargo')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`editarproduto:clearrole:${product.id}`)
+        .setLabel('🗑️ Remover cargo de entrega')
+        .setStyle(ButtonStyle.Danger)
     );
+    container.addActionRowComponents(roleButtons);
   }
 
   return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
@@ -483,6 +509,54 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // /meusbeneficios
+    if (interaction.commandName === 'meusbeneficios') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const grants = await listActiveRoleGrantsForUser(interaction.user.id);
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(benefitsSectionContent('## 🎭 Seus benefícios ativos', grants));
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    // /usuario
+    if (interaction.commandName === 'usuario') {
+      if (!(await isStoreModerator(interaction))) {
+        await interaction.reply({ content: 'Você não tem permissão para consultar dados de usuários.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const target = interaction.options.getUser('usuario', true);
+      const [orders, grants] = await Promise.all([listOrdersByUser(target.id, 10), listActiveRoleGrantsForUser(target.id)]);
+
+      const container = new ContainerBuilder();
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👤 ${target.tag}\n\`${target.id}\``));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent('### 📜 Últimos pedidos'));
+      if (orders.length === 0) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('Nenhum pedido encontrado.'));
+      } else {
+        for (const order of orders) {
+          container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              `**${order.product.name}** — R$ ${formatPrice(order.product.price)} — ${order.paymentMethod === 'pix' ? '💠' : '💳'} — ${STATUS_LABEL[order.status]}\n\`${order.id}\` • ${formatDate(order.createdAt)}`
+            )
+          );
+        }
+      }
+
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+      container.addTextDisplayComponents(benefitsSectionContent('### 🎭 Benefícios ativos', grants));
+
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
     // /addproduto
     if (interaction.commandName === 'addproduto') {
       if (!(await isStoreModerator(interaction))) {
@@ -497,6 +571,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const description = interaction.options.getString('descricao', true);
       const deliveryMessage = interaction.options.getString('entrega', true);
       const deliveryRole = interaction.options.getRole('cargo') ?? undefined;
+      const durationRaw = interaction.options.getString('duracao_cargo') ?? undefined;
       const position = interaction.options.getInteger('posicao') ?? undefined;
 
       const price = parsePrice(priceRaw);
@@ -506,28 +581,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      let deliveryRoleDuration = undefined;
+      if (durationRaw) {
+        deliveryRoleDuration = parseDuration(durationRaw);
+        if (!deliveryRoleDuration) {
+          await interaction.editReply('Duração inválida. Use um formato como `30 dias`, `1 mes`, `1 ano`, `12 horas`.');
+          return;
+        }
+        if (!deliveryRole) {
+          await interaction.editReply('`duracao_cargo` só funciona se você também escolher um `cargo`.');
+          return;
+        }
+      }
+
       const product = await addProduct({
         name,
         description,
         price,
         deliveryMessage,
         deliveryRoleId: deliveryRole?.id,
+        deliveryRoleDuration,
         position
       });
+
+      const durationText = deliveryRoleDuration ? formatDuration(deliveryRoleDuration) : 'Permanente';
 
       await logAdmin(client, {
         actor: interaction.user,
         title: '➕ Produto adicionado',
         description:
           `**ID:** \`${product.id}\` • **Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n` +
-          `**Descrição:** ${product.description}\n**Mensagem de entrega:** ${product.deliveryMessage}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}`,
+          `**Descrição:** ${product.description}\n**Mensagem de entrega:** ${product.deliveryMessage}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}` +
+          (deliveryRole ? `\n**Duração do cargo:** ${durationText}` : ''),
         color: LOG_COLOR.added
       });
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `## ✅ Produto adicionado\n**ID:** \`${product.id}\`\n**Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Descrição:** ${product.description}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}`
+          `## ✅ Produto adicionado\n**ID:** \`${product.id}\`\n**Posição:** ${product.position}\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Descrição:** ${product.description}\n**Cargo de entrega:** ${deliveryRole ? `<@&${deliveryRole.id}>` : 'Nenhum'}${deliveryRole ? `\n**Duração do cargo:** ${durationText}` : ''}`
         )
       );
 
@@ -908,6 +1000,46 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.customId.startsWith('editarproduto:durationmodal:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+      const before = await findProduct(productId);
+      const raw = interaction.fields.getTextInputValue('duracao').trim();
+
+      const duration = raw ? parseDuration(raw) : undefined;
+
+      if (raw && !duration) {
+        await interaction.reply({
+          content: 'Duração inválida. Use um formato como `30 dias`, `1 mes`, `1 ano`, `12 horas`, ou deixe vazio para permanente.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      const updated = await setProductDeliveryRoleDuration(productId, duration ?? null);
+
+      if (!updated) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await logAdmin(client, {
+        actor: interaction.user,
+        title: '⏱️ Duração do cargo de entrega alterada',
+        description:
+          `**Produto:** ${updated.name} (\`${updated.id}\`)\n` +
+          `**Antes:** ${before?.deliveryRoleDuration ? formatDuration(before.deliveryRoleDuration) : 'Permanente'}\n` +
+          `**Agora:** ${duration ? formatDuration(duration) : 'Permanente'}`,
+        color: LOG_COLOR.edited
+      });
+
+      if (interaction.isFromMessage()) {
+        await interaction.update(buildEditProductOverviewReply(updated));
+      } else {
+        await interaction.reply({ components: buildEditProductOverviewReply(updated).components, flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
+      }
+      return;
+    }
+
     if (interaction.customId === 'loja:jumpmodal') {
       const raw = interaction.fields.getTextInputValue('pagina').trim();
       const page = Number(raw);
@@ -1019,6 +1151,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
 
       await interaction.update(buildEditProductOverviewReply(updated));
+      return;
+    }
+
+    if (interaction.customId.startsWith('editarproduto:duration:')) {
+      const productId = Number(interaction.customId.split(':')[2]);
+      const product = await findProduct(productId);
+
+      if (!product) {
+        await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(`editarproduto:durationmodal:${productId}`)
+        .setTitle('Duração do cargo de entrega');
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('duracao')
+            .setLabel('Ex: 30 dias, 1 mes, 1 ano, 12 horas')
+            .setStyle(TextInputStyle.Short)
+            .setValue(product.deliveryRoleDuration ? formatDuration(product.deliveryRoleDuration) : '')
+            .setPlaceholder('Deixe vazio para permanente')
+            .setRequired(false)
+            .setMaxLength(30)
+        )
+      );
+
+      await interaction.showModal(modal);
       return;
     }
 
@@ -1180,6 +1342,66 @@ async function migrateWithRetry(maxAttempts = 10, delayMs = 3000) {
 
 const CLEANUP_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
 const PAYMENT_POLL_INTERVAL_MS = 2 * 60_000; // roda a cada 2 minutos
+const ROLE_EXPIRATION_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
+
+/**
+ * Remove automaticamente o cargo de quem comprou um benefício por tempo limitado, assim que o
+ * prazo vence. Avisa o comprador por DM e registra nos dois canais de log (vendas e admin).
+ */
+async function expireRoleGrantsJob() {
+  try {
+    const expired = await listExpiredRoleGrants();
+
+    for (const order of expired) {
+      try {
+        let removed = false;
+
+        if (order.guildId && order.product.deliveryRoleId) {
+          try {
+            const guild = await client.guilds.fetch(order.guildId);
+            const member = await guild.members.fetch(order.userId).catch(() => undefined);
+            if (member) {
+              await member.roles.remove(order.product.deliveryRoleId, `Benefício expirado — pedido ${order.id}`);
+              removed = true;
+            }
+          } catch (error) {
+            console.error(`Falha ao remover cargo expirado do pedido ${order.id}:`, error);
+          }
+        }
+
+        await updateOrder(order.id, { roleRemovedAt: new Date().toISOString() });
+
+        try {
+          const user = await client.users.fetch(order.userId);
+          await user.send(
+            `⏰ Seu acesso de **${order.product.name}** expirou${removed ? ' e o cargo foi removido' : ''}. Se quiser continuar com acesso, é só comprar de novo!`
+          );
+        } catch (error) {
+          console.error(`Falha ao avisar por DM sobre expiração do pedido ${order.id}:`, error);
+        }
+
+        await logSale(client, {
+          title: '⏰ Benefício expirado',
+          description: `<@${order.userId}> — ${order.product.name} (\`${order.id}\`)`,
+          color: LOG_COLOR.expired
+        });
+
+        await logAdmin(client, {
+          title: '⏰ Cargo removido automaticamente (prazo expirado)',
+          description:
+            `**Usuário:** <@${order.userId}>\n**Produto:** ${order.product.name}\n` +
+            `**Cargo:** ${order.product.deliveryRoleId ? `<@&${order.product.deliveryRoleId}>` : '—'}\n**Pedido:** \`${order.id}\`\n` +
+            `**Removido do Discord:** ${removed ? '✅ Sim' : '⚠️ Não (membro não encontrado no servidor, ou cargo já removido manualmente)'}`,
+          color: LOG_COLOR.warning
+        });
+      } catch (error) {
+        console.error(`Falha ao processar expiração do pedido ${order.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Falha ao rodar a expiração automática de cargos:', error);
+  }
+}
 
 async function cleanupExpiredOrdersJob() {
   try {
@@ -1264,6 +1486,9 @@ if (missingEnv.length > 0) {
   setInterval(cleanupExpiredOrdersJob, CLEANUP_INTERVAL_MS);
 
   setInterval(pollPendingPaymentsJob, PAYMENT_POLL_INTERVAL_MS);
+
+  await expireRoleGrantsJob();
+  setInterval(expireRoleGrantsJob, ROLE_EXPIRATION_INTERVAL_MS);
 
   if (config.autoRegisterCommands) {
     try {

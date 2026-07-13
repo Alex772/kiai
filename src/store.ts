@@ -1,4 +1,5 @@
 import { query } from './db.js';
+import type { Duration } from './duration.js';
 import type { Product } from './products.js';
 
 export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
@@ -18,6 +19,10 @@ export type Order = {
   qrCode?: string;
   qrCodeBase64?: string;
   checkoutUrl?: string;
+  /** Quando o cargo de entrega (se houver) deve ser removido automaticamente. Undefined = permanente. */
+  roleExpiresAt?: string;
+  /** Quando o cargo foi de fato removido pela expiração (marca o evento como já processado). */
+  roleRemovedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -32,12 +37,16 @@ type OrderRow = {
   product_price: string;
   product_delivery_message: string;
   product_delivery_role_id: string | null;
+  product_delivery_role_duration_amount: number | null;
+  product_delivery_role_duration_unit: string | null;
   status: OrderStatus;
   payment_method: PaymentMethod;
   payment_id: string | null;
   qr_code: string | null;
   qr_code_base64: string | null;
   checkout_url: string | null;
+  role_expires_at: string | null;
+  role_removed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -53,7 +62,11 @@ function mapRow(row: OrderRow): Order {
       description: row.product_description,
       price: Number(row.product_price),
       deliveryMessage: row.product_delivery_message,
-      deliveryRoleId: row.product_delivery_role_id ?? undefined
+      deliveryRoleId: row.product_delivery_role_id ?? undefined,
+      deliveryRoleDuration:
+        row.product_delivery_role_duration_amount && row.product_delivery_role_duration_unit
+          ? { amount: row.product_delivery_role_duration_amount, unit: row.product_delivery_role_duration_unit as Duration['unit'] }
+          : undefined
     },
     status: row.status,
     paymentMethod: row.payment_method ?? 'pix',
@@ -61,6 +74,8 @@ function mapRow(row: OrderRow): Order {
     qrCode: row.qr_code ?? undefined,
     qrCodeBase64: row.qr_code_base64 ?? undefined,
     checkoutUrl: row.checkout_url ?? undefined,
+    roleExpiresAt: row.role_expires_at ?? undefined,
+    roleRemovedAt: row.role_removed_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -74,8 +89,12 @@ export async function createOrder(input: {
   paymentMethod: PaymentMethod;
 }): Promise<Order> {
   const rows = await query<OrderRow>(
-    `INSERT INTO orders (id, user_id, guild_id, product_id, product_name, product_description, product_price, product_delivery_message, product_delivery_role_id, payment_method, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING *`,
+    `INSERT INTO orders (
+       id, user_id, guild_id, product_id, product_name, product_description, product_price,
+       product_delivery_message, product_delivery_role_id, product_delivery_role_duration_amount,
+       product_delivery_role_duration_unit, payment_method, status
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending') RETURNING *`,
     [
       input.id,
       input.userId,
@@ -86,6 +105,8 @@ export async function createOrder(input: {
       input.product.price,
       input.product.deliveryMessage,
       input.product.deliveryRoleId ?? null,
+      input.product.deliveryRoleDuration?.amount ?? null,
+      input.product.deliveryRoleDuration?.unit ?? null,
       input.paymentMethod
     ]
   );
@@ -171,9 +192,39 @@ export async function cancelExpiredOrders(): Promise<Order[]> {
   return rows.map(mapRow);
 }
 
+/**
+ * Lista pedidos aprovados com cargo de entrega temporário cujo prazo já venceu e que ainda não
+ * foram processados (role_removed_at IS NULL). Usado pelo job de expiração automática de cargos.
+ */
+export async function listExpiredRoleGrants(): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders
+     WHERE status = 'approved' AND product_delivery_role_id IS NOT NULL
+       AND role_expires_at IS NOT NULL AND role_expires_at <= now() AND role_removed_at IS NULL
+     ORDER BY role_expires_at ASC`
+  );
+  return rows.map(mapRow);
+}
+
+/**
+ * Lista os benefícios (cargos) ativos de um usuário — pedidos aprovados com cargo de entrega que
+ * ainda não foi removido. Usado por /meusbeneficios e pelo comando administrativo de consulta.
+ */
+export async function listActiveRoleGrantsForUser(userId: string): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders
+     WHERE user_id = $1 AND status = 'approved' AND product_delivery_role_id IS NOT NULL AND role_removed_at IS NULL
+     ORDER BY role_expires_at ASC NULLS LAST`,
+    [userId]
+  );
+  return rows.map(mapRow);
+}
+
 export async function updateOrder(
   orderId: string,
-  patch: Partial<Pick<Order, 'status' | 'paymentId' | 'qrCode' | 'qrCodeBase64' | 'checkoutUrl'>>
+  patch: Partial<
+    Pick<Order, 'status' | 'paymentId' | 'qrCode' | 'qrCodeBase64' | 'checkoutUrl' | 'roleExpiresAt' | 'roleRemovedAt'>
+  >
 ): Promise<Order | undefined> {
   const current = await getOrder(orderId);
   if (!current) return undefined;
@@ -181,8 +232,19 @@ export async function updateOrder(
   const updated = { ...current, ...patch };
 
   await query(
-    'UPDATE orders SET status=$2, payment_id=$3, qr_code=$4, qr_code_base64=$5, checkout_url=$6, updated_at=now() WHERE id=$1',
-    [orderId, updated.status, updated.paymentId ?? null, updated.qrCode ?? null, updated.qrCodeBase64 ?? null, updated.checkoutUrl ?? null]
+    `UPDATE orders SET status=$2, payment_id=$3, qr_code=$4, qr_code_base64=$5, checkout_url=$6,
+       role_expires_at=$7, role_removed_at=$8, updated_at=now()
+     WHERE id=$1`,
+    [
+      orderId,
+      updated.status,
+      updated.paymentId ?? null,
+      updated.qrCode ?? null,
+      updated.qrCodeBase64 ?? null,
+      updated.checkoutUrl ?? null,
+      updated.roleExpiresAt ?? null,
+      updated.roleRemovedAt ?? null
+    ]
   );
 
   return updated;
