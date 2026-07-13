@@ -38,7 +38,7 @@ export const commands = [
     .addStringOption((o) =>
       o
         .setName('duracao_cargo')
-        .setDescription('Por quanto tempo o cargo fica ativo (ex: 30 dias, 1 mes, 1 ano). Só funciona junto com "cargo". Vazio = permanente.')
+        .setDescription('Duração do cargo (ex: 30 dias, 1 mes). Só com "cargo". Vazio = permanente.')
         .setRequired(false)
         .setMaxLength(30)
     )
@@ -63,7 +63,7 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('usuario')
-    .setDescription('Consulta o histórico de compras e benefícios ativos de um usuário. (Dono do servidor ou cargo autorizado)')
+    .setDescription('Consulta compras e benefícios de um usuário. (Dono do servidor ou cargo autorizado)')
     .addUserOption((o) => o.setName('usuario').setDescription('Usuário a consultar').setRequired(true)),
 
   new SlashCommandBuilder()
