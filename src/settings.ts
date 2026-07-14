@@ -32,8 +32,10 @@ const DEFAULTS: StoreSettings = {
   description: 'Escolha um produto abaixo para comprar via PIX (Mercado Pago).'
 };
 
-export async function getStoreSettings(): Promise<StoreSettings> {
-  const rows = await query<{ key: string; value: string }>('SELECT key, value FROM store_settings');
+export async function getStoreSettings(guildId: string): Promise<StoreSettings> {
+  const rows = await query<{ key: string; value: string }>('SELECT key, value FROM store_settings WHERE guild_id = $1', [
+    guildId
+  ]);
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
 
   const itemsPerPage = map.items_per_page ? Number(map.items_per_page) : DEFAULTS.itemsPerPage;
@@ -49,7 +51,7 @@ export async function getStoreSettings(): Promise<StoreSettings> {
   };
 }
 
-export async function updateStoreSettings(patch: StoreSettingsPatch): Promise<StoreSettings> {
+export async function updateStoreSettings(guildId: string, patch: StoreSettingsPatch): Promise<StoreSettings> {
   const upserts: [string, string][] = [];
   const deletes: string[] = [];
 
@@ -79,14 +81,14 @@ export async function updateStoreSettings(patch: StoreSettingsPatch): Promise<St
 
   for (const [key, value] of upserts) {
     await query(
-      'INSERT INTO store_settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
-      [key, value]
+      'INSERT INTO store_settings (guild_id, key, value) VALUES ($1,$2,$3) ON CONFLICT (guild_id, key) DO UPDATE SET value = EXCLUDED.value',
+      [guildId, key, value]
     );
   }
 
   for (const key of deletes) {
-    await query('DELETE FROM store_settings WHERE key = $1', [key]);
+    await query('DELETE FROM store_settings WHERE guild_id = $1 AND key = $2', [guildId, key]);
   }
 
-  return getStoreSettings();
+  return getStoreSettings(guildId);
 }

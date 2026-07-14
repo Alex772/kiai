@@ -33,9 +33,10 @@ async function sendToChannel(client: Client, channelId: string | undefined, embe
  */
 export async function logSale(
   client: Client,
+  guildId: string,
   opts: { title: string; description: string; color?: ColorResolvable }
 ) {
-  const settings = await getStoreSettings();
+  const settings = await getStoreSettings(guildId);
   if (!settings.salesLogChannelId) return;
 
   const embed = new EmbedBuilder()
@@ -54,9 +55,10 @@ export async function logSale(
  */
 export async function logAdmin(
   client: Client,
+  guildId: string,
   opts: { actor?: User; title: string; description: string; color?: ColorResolvable }
 ) {
-  const settings = await getStoreSettings();
+  const settings = await getStoreSettings(guildId);
   if (!settings.adminLogChannelId) return;
 
   const embed = new EmbedBuilder()

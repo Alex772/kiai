@@ -99,7 +99,7 @@ async function isStoreAdmin(interaction: ChatInputCommandInteraction): Promise<b
   if (isGuildOwner(interaction)) return true;
   if (!interaction.inCachedGuild()) return false;
 
-  const settings = await getStoreSettings();
+  const settings = await getStoreSettings(interaction.guildId);
   return settings.adminRoleId ? interaction.member.roles.cache.has(settings.adminRoleId) : false;
 }
 
@@ -108,7 +108,7 @@ async function isStoreModerator(interaction: ChatInputCommandInteraction): Promi
   if (await isStoreAdmin(interaction)) return true;
   if (!interaction.inCachedGuild()) return false;
 
-  const settings = await getStoreSettings();
+  const settings = await getStoreSettings(interaction.guildId);
   return settings.moderatorRoleId ? interaction.member.roles.cache.has(settings.moderatorRoleId) : false;
 }
 
@@ -177,7 +177,7 @@ function buildPaymentMethodChoiceReply(product: Product) {
   return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
 }
 
-async function buildPixOrder(userId: string, guildId: string | undefined, product: Product) {
+async function buildPixOrder(userId: string, guildId: string, product: Product) {
   const existing = await findRecentPendingOrder(userId, product.id, 'pix');
 
   if (existing && existing.paymentId && existing.qrCode) {
@@ -196,7 +196,7 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
     qrCodeBase64: pix.qrCodeBase64
   });
 
-  await logSale(client, {
+  await logSale(client, guildId, {
     title: '🛒 Pedido criado (PIX)',
     description:
       `**Comprador:** <@${userId}> (\`${userId}\`)\n**Produto:** ${product.name}\n**Valor:** R$ ${formatPrice(product.price)}\n**Pedido:** \`${order.id}\``,
@@ -206,7 +206,7 @@ async function buildPixOrder(userId: string, guildId: string | undefined, produc
   return { order: updated ?? order, pix, reused: false };
 }
 
-async function buildCardOrder(userId: string, guildId: string | undefined, product: Product) {
+async function buildCardOrder(userId: string, guildId: string, product: Product) {
   const existing = await findRecentPendingOrder(userId, product.id, 'card');
 
   if (existing && existing.checkoutUrl) {
@@ -217,7 +217,7 @@ async function buildCardOrder(userId: string, guildId: string | undefined, produ
   const { checkoutUrl } = await createCardCheckoutLink(order);
   const updated = await updateOrder(order.id, { checkoutUrl });
 
-  await logSale(client, {
+  await logSale(client, guildId, {
     title: '🛒 Pedido criado (Cartão)',
     description:
       `**Comprador:** <@${userId}> (\`${userId}\`)\n**Produto:** ${product.name}\n**Valor:** R$ ${formatPrice(product.price)}\n**Pedido:** \`${order.id}\``,
@@ -301,8 +301,8 @@ function buildCardPaymentReply(order: Order, checkoutUrl: string, reused = false
   return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
 }
 
-async function buildLojaReply(requestedPage: number) {
-  const [products, settings] = await Promise.all([listProducts(), getStoreSettings()]);
+async function buildLojaReply(guildId: string, requestedPage: number) {
+  const [products, settings] = await Promise.all([listProducts(guildId), getStoreSettings(guildId)]);
   const perPage = Math.max(1, settings.itemsPerPage);
   const totalPages = Math.max(1, Math.ceil(products.length / perPage));
   const page = Math.min(Math.max(requestedPage, 1), totalPages);
@@ -404,7 +404,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const focused = autocomplete.options.getFocused().toLowerCase();
 
     if (['comprar', 'removerproduto'].includes(autocomplete.commandName)) {
-      const products = await listProducts();
+      if (!autocomplete.guildId) {
+        await autocomplete.respond([]);
+        return;
+      }
+      const products = await listProducts(autocomplete.guildId);
       const choices = products
         .filter((p) => p.name.toLowerCase().includes(focused) || String(p.id).includes(focused))
         .slice(0, 25)
@@ -415,7 +419,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (autocomplete.commandName === 'pedido') {
-      const orders = await listOrdersByUser(autocomplete.user.id, 25);
+      if (!autocomplete.guildId) {
+        await autocomplete.respond([]);
+        return;
+      }
+      const orders = await listOrdersByUser(autocomplete.user.id, autocomplete.guildId, 25);
       const choices = orders
         .filter((o) => o.id.includes(focused) || o.product.name.toLowerCase().includes(focused))
         .map((o) => ({
@@ -438,7 +446,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // /loja
     if (interaction.commandName === 'loja') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      await interaction.editReply(await buildLojaReply(1));
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
+      await interaction.editReply(await buildLojaReply(interaction.guildId, 1));
       return;
     }
 
@@ -446,8 +460,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'comprar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const productId = Number(interaction.options.getString('produto', true));
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.editReply('Produto não encontrado.');
@@ -487,7 +506,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // /pedidos
     if (interaction.commandName === 'pedidos') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const orders = await listOrdersByUser(interaction.user.id, 10);
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
+      const orders = await listOrdersByUser(interaction.user.id, interaction.guildId, 10);
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent('## 📜 Seus últimos pedidos'));
@@ -512,7 +537,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // /meusbeneficios
     if (interaction.commandName === 'meusbeneficios') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const grants = await listActiveRoleGrantsForUser(interaction.user.id);
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
+      const grants = await listActiveRoleGrantsForUser(interaction.user.id, interaction.guildId);
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(benefitsSectionContent('## 🎭 Seus benefícios ativos', grants));
@@ -530,8 +561,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const target = interaction.options.getUser('usuario', true);
-      const [orders, grants] = await Promise.all([listOrdersByUser(target.id, 10), listActiveRoleGrantsForUser(target.id)]);
+      const [orders, grants] = await Promise.all([
+        listOrdersByUser(target.id, interaction.guildId, 10),
+        listActiveRoleGrantsForUser(target.id, interaction.guildId)
+      ]);
 
       const container = new ContainerBuilder();
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👤 ${target.tag}\n\`${target.id}\``));
@@ -566,6 +605,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const name = interaction.options.getString('nome', true);
       const priceRaw = interaction.options.getString('preco', true);
       const description = interaction.options.getString('descricao', true);
@@ -594,7 +638,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      const product = await addProduct({
+      const product = await addProduct(interaction.guildId, {
         name,
         description,
         price,
@@ -606,7 +650,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const durationText = deliveryRoleDuration ? formatDuration(deliveryRoleDuration) : 'Permanente';
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '➕ Produto adicionado',
         description:
@@ -636,7 +680,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const products = await listProducts();
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
+      const products = await listProducts(interaction.guildId);
 
       if (products.length === 0) {
         await interaction.editReply('Não há produtos cadastrados ainda. Use `/addproduto` primeiro.');
@@ -676,17 +725,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const productId = Number(interaction.options.getString('produto', true));
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.editReply('Produto não encontrado.');
         return;
       }
 
-      await removeProduct(productId);
+      await removeProduct(interaction.guildId, productId);
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '🗑️ Produto removido',
         description: `**ID:** \`${product.id}\`\n**Nome:** ${product.name}\n**Preço:** R$ ${formatPrice(product.price)}\n**Cargo de entrega:** ${product.deliveryRoleId ? `<@&${product.deliveryRoleId}>` : 'Nenhum'}`,
@@ -714,22 +768,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const itemsPerPage = interaction.options.getInteger('itens_por_pagina') ?? undefined;
       const title = interaction.options.getString('titulo') ?? undefined;
       const description = interaction.options.getString('descricao') ?? undefined;
 
       if (itemsPerPage === undefined && title === undefined && description === undefined) {
-        const current = await getStoreSettings();
+        const current = await getStoreSettings(interaction.guildId);
         await interaction.editReply(
           `## ⚙️ Configuração atual da loja\n**Itens por página:** ${current.itemsPerPage}\n**Título:** ${current.title}\n**Descrição:** ${current.description}`
         );
         return;
       }
 
-      const before = await getStoreSettings();
-      const updated = await updateStoreSettings({ itemsPerPage, title, description });
+      const before = await getStoreSettings(interaction.guildId);
+      const updated = await updateStoreSettings(interaction.guildId, { itemsPerPage, title, description });
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '⚙️ Configuração da loja alterada',
         description: diffFields(
@@ -762,6 +821,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const cargoAdmin = interaction.options.getRole('cargo_admin');
       const cargoModerador = interaction.options.getRole('cargo_moderador');
       const removerAdmin = interaction.options.getBoolean('remover_admin') ?? false;
@@ -770,7 +834,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const semMudancas = !cargoAdmin && !cargoModerador && !removerAdmin && !removerModerador;
 
       if (semMudancas) {
-        const current = await getStoreSettings();
+        const current = await getStoreSettings(interaction.guildId);
         await interaction.editReply(
           `## ⚙️ Permissões atuais da loja\n` +
             `**Cargo admin** (configura a loja + gerencia produtos): ${current.adminRoleId ? `<@&${current.adminRoleId}>` : 'Não definido (só o dono do servidor)'}\n` +
@@ -779,12 +843,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const updated = await updateStoreSettings({
+      const updated = await updateStoreSettings(interaction.guildId, {
         adminRoleId: removerAdmin ? null : cargoAdmin?.id,
         moderatorRoleId: removerModerador ? null : cargoModerador?.id
       });
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '🔐 Permissões da loja alteradas',
         description:
@@ -818,6 +882,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const canalVendas = interaction.options.getChannel('canal_vendas');
       const canalAdmin = interaction.options.getChannel('canal_admin');
       const removerVendas = interaction.options.getBoolean('remover_vendas') ?? false;
@@ -826,7 +895,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const semMudancas = !canalVendas && !canalAdmin && !removerVendas && !removerAdmin;
 
       if (semMudancas) {
-        const current = await getStoreSettings();
+        const current = await getStoreSettings(interaction.guildId);
         await interaction.editReply(
           `## 📋 Canais de log atuais\n` +
             `**Vendas/compras:** ${current.salesLogChannelId ? `<#${current.salesLogChannelId}>` : 'Não configurado'}\n` +
@@ -836,12 +905,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const updated = await updateStoreSettings({
+      const updated = await updateStoreSettings(interaction.guildId, {
         salesLogChannelId: removerVendas ? null : canalVendas?.id,
         adminLogChannelId: removerAdmin ? null : canalAdmin?.id
       });
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '📋 Canais de log alterados',
         description:
@@ -877,8 +946,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     if (interaction.customId === 'editarproduto:select') {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.values[0]);
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
@@ -901,18 +975,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     if (interaction.customId.startsWith('editarproduto:role:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
       const roleId = interaction.values[0];
 
-      const before = await findProduct(productId);
-      const updated = await setProductDeliveryRole(productId, roleId);
+      const before = await findProduct(interaction.guildId, productId);
+      const updated = await setProductDeliveryRole(interaction.guildId, productId, roleId);
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '🎭 Cargo de entrega alterado',
         description:
@@ -938,8 +1017,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     if (interaction.customId.startsWith('editarproduto:modal:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
-      const before = await findProduct(productId);
+      const before = await findProduct(interaction.guildId, productId);
 
       const name = interaction.fields.getTextInputValue('nome').trim();
       const priceRaw = interaction.fields.getTextInputValue('preco').trim();
@@ -959,7 +1043,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const updated = await editProduct(productId, { name, price, description, deliveryMessage, position });
+      const updated = await editProduct(interaction.guildId, productId, { name, price, description, deliveryMessage, position });
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
@@ -967,7 +1051,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (before) {
-        await logAdmin(client, {
+        await logAdmin(client, interaction.guildId, {
           actor: interaction.user,
           title: '✏️ Produto editado',
           description:
@@ -1001,8 +1085,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.customId.startsWith('editarproduto:durationmodal:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
-      const before = await findProduct(productId);
+      const before = await findProduct(interaction.guildId, productId);
       const raw = interaction.fields.getTextInputValue('duracao').trim();
 
       const duration = raw ? parseDuration(raw) : undefined;
@@ -1015,14 +1104,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const updated = await setProductDeliveryRoleDuration(productId, duration ?? null);
+      const updated = await setProductDeliveryRoleDuration(interaction.guildId, productId, duration ?? null);
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '⏱️ Duração do cargo de entrega alterada',
         description:
@@ -1045,8 +1134,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const page = Number(raw);
       const targetPage = Number.isInteger(page) && page > 0 ? page : 1;
 
-      if (interaction.isFromMessage()) {
-        await interaction.update(await buildLojaReply(targetPage));
+      if (interaction.isFromMessage() && interaction.guildId) {
+        await interaction.update(await buildLojaReply(interaction.guildId, targetPage));
       } else {
         await interaction.reply({ content: 'Não foi possível atualizar a página.', flags: MessageFlags.Ephemeral });
       }
@@ -1067,15 +1156,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     if (interaction.customId.startsWith('editarproduto:editbtn:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
 
-      const total = await countProducts();
+      const total = await countProducts(interaction.guildId);
 
       const modal = new ModalBuilder()
         .setCustomId(`editarproduto:modal:${productId}`)
@@ -1134,16 +1228,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.customId.startsWith('editarproduto:clearrole:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
-      const before = await findProduct(productId);
-      const updated = await setProductDeliveryRole(productId, null);
+      const before = await findProduct(interaction.guildId, productId);
+      const updated = await setProductDeliveryRole(interaction.guildId, productId, null);
 
       if (!updated) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
         return;
       }
 
-      await logAdmin(client, {
+      await logAdmin(client, interaction.guildId, {
         actor: interaction.user,
         title: '🎭 Cargo de entrega removido',
         description: `**Produto:** ${updated.name} (\`${updated.id}\`)\n**Cargo removido:** ${before?.deliveryRoleId ? `<@&${before.deliveryRoleId}>` : 'Nenhum'}`,
@@ -1155,8 +1254,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.customId.startsWith('editarproduto:duration:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       const productId = Number(interaction.customId.split(':')[2]);
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.reply({ content: 'Produto não encontrado (pode ter sido removido).', flags: MessageFlags.Ephemeral });
@@ -1185,8 +1289,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.customId.startsWith('loja:page:')) {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'Esse comando só funciona dentro de um servidor.', flags: MessageFlags.Ephemeral });
+        return;
+      }
       const targetPage = Number(interaction.customId.split(':')[2]);
-      await interaction.update(await buildLojaReply(targetPage));
+      await interaction.update(await buildLojaReply(interaction.guildId, targetPage));
       return;
     }
 
@@ -1208,8 +1316,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.customId.startsWith('comprar:')) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const productId = Number(interaction.customId.replace('comprar:', ''));
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.editReply('Produto não encontrado (pode ter sido removido).');
@@ -1222,15 +1336,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.customId.startsWith('pagarpix:')) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const productId = Number(interaction.customId.replace('pagarpix:', ''));
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.editReply('Produto não encontrado (pode ter sido removido).');
         return;
       }
 
-      const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId ?? undefined, product);
+      const { order, pix, reused } = await buildPixOrder(interaction.user.id, interaction.guildId, product);
 
       if (!pix.paymentId || !pix.qrCode) {
         await interaction.editReply('Não foi possível gerar o PIX. Tente novamente em alguns minutos.');
@@ -1243,15 +1363,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.customId.startsWith('pagarcartao:')) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
       const productId = Number(interaction.customId.replace('pagarcartao:', ''));
-      const product = await findProduct(productId);
+      const product = await findProduct(interaction.guildId, productId);
 
       if (!product) {
         await interaction.editReply('Produto não encontrado (pode ter sido removido).');
         return;
       }
 
-      const { order, checkoutUrl, reused } = await buildCardOrder(interaction.user.id, interaction.guildId ?? undefined, product);
+      const { order, checkoutUrl, reused } = await buildCardOrder(interaction.user.id, interaction.guildId, product);
 
       if (!checkoutUrl) {
         await interaction.editReply(
@@ -1380,20 +1506,22 @@ async function expireRoleGrantsJob() {
           console.error(`Falha ao avisar por DM sobre expiração do pedido ${order.id}:`, error);
         }
 
-        await logSale(client, {
-          title: '⏰ Benefício expirado',
-          description: `<@${order.userId}> — ${order.product.name} (\`${order.id}\`)`,
-          color: LOG_COLOR.expired
-        });
+        if (order.guildId) {
+          await logSale(client, order.guildId, {
+            title: '⏰ Benefício expirado',
+            description: `<@${order.userId}> — ${order.product.name} (\`${order.id}\`)`,
+            color: LOG_COLOR.expired
+          });
 
-        await logAdmin(client, {
-          title: '⏰ Cargo removido automaticamente (prazo expirado)',
-          description:
-            `**Usuário:** <@${order.userId}>\n**Produto:** ${order.product.name}\n` +
-            `**Cargo:** ${order.product.deliveryRoleId ? `<@&${order.product.deliveryRoleId}>` : '—'}\n**Pedido:** \`${order.id}\`\n` +
-            `**Removido do Discord:** ${removed ? '✅ Sim' : '⚠️ Não (membro não encontrado no servidor, ou cargo já removido manualmente)'}`,
-          color: LOG_COLOR.warning
-        });
+          await logAdmin(client, order.guildId, {
+            title: '⏰ Cargo removido automaticamente (prazo expirado)',
+            description:
+              `**Usuário:** <@${order.userId}>\n**Produto:** ${order.product.name}\n` +
+              `**Cargo:** ${order.product.deliveryRoleId ? `<@&${order.product.deliveryRoleId}>` : '—'}\n**Pedido:** \`${order.id}\`\n` +
+              `**Removido do Discord:** ${removed ? '✅ Sim' : '⚠️ Não (membro não encontrado no servidor, ou cargo já removido manualmente)'}`,
+            color: LOG_COLOR.warning
+          });
+        }
       } catch (error) {
         console.error(`Falha ao processar expiração do pedido ${order.id}:`, error);
       }
@@ -1411,13 +1539,23 @@ async function cleanupExpiredOrdersJob() {
         `${cancelled.length} pedido(s) pendente(s) expiraram (mais de ${ORDER_EXPIRATION_MINUTES} min sem pagamento) e foram marcados como cancelados.`
       );
 
-      await logSale(client, {
-        title: `🕐 ${cancelled.length} pedido(s) expirado(s)`,
-        description: cancelled
-          .map((o) => `<@${o.userId}> — ${o.product.name} — R$ ${formatPrice(o.product.price)} (\`${o.id}\`)`)
-          .join('\n'),
-        color: LOG_COLOR.expired
-      });
+      const byGuild = new Map<string, Order[]>();
+      for (const order of cancelled) {
+        if (!order.guildId) continue;
+        const list = byGuild.get(order.guildId) ?? [];
+        list.push(order);
+        byGuild.set(order.guildId, list);
+      }
+
+      for (const [guildId, orders] of byGuild) {
+        await logSale(client, guildId, {
+          title: `🕐 ${orders.length} pedido(s) expirado(s)`,
+          description: orders
+            .map((o) => `<@${o.userId}> — ${o.product.name} — R$ ${formatPrice(o.product.price)} (\`${o.id}\`)`)
+            .join('\n'),
+          color: LOG_COLOR.expired
+        });
+      }
     }
   } catch (error) {
     console.error('Falha ao limpar pedidos expirados:', error);

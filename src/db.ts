@@ -7,6 +7,7 @@ function cleanEnv(value: string | undefined): string | undefined {
 }
 
 const connectionString = cleanEnv(process.env.DATABASE_URL) || cleanEnv(process.env.DATABASE_PUBLIC_URL);
+const fallbackGuildId = cleanEnv(process.env.DISCORD_GUILD_ID);
 
 if (!connectionString) {
   console.warn(
@@ -97,7 +98,9 @@ export async function migrate() {
     await client.query('CREATE INDEX IF NOT EXISTS orders_user_id_idx ON orders (user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS orders_payment_id_idx ON orders (payment_id);');
     await client.query('CREATE INDEX IF NOT EXISTS orders_role_expires_at_idx ON orders (role_expires_at);');
+    await client.query('CREATE INDEX IF NOT EXISTS orders_guild_id_idx ON orders (guild_id);');
 
+    // ---------- products ----------
     const { rows: columnRows } = await client.query<{ column_name: string; data_type: string }>(
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'products'`
     );
@@ -106,11 +109,13 @@ export async function migrate() {
     const idColumn = columnRows.find((c) => c.column_name === 'id');
     const idIsInteger = idColumn ? ['integer', 'bigint', 'smallint'].includes(idColumn.data_type) : false;
     const hasPosition = columnRows.some((c) => c.column_name === 'position');
+    const hasGuildId = columnRows.some((c) => c.column_name === 'guild_id');
 
     if (!productsExists) {
       await client.query(`
         CREATE TABLE products (
           id SERIAL PRIMARY KEY,
+          guild_id TEXT,
           name TEXT NOT NULL,
           description TEXT NOT NULL,
           price NUMERIC(10,2) NOT NULL,
@@ -128,6 +133,7 @@ export async function migrate() {
       await client.query(`
         CREATE TABLE products (
           id SERIAL PRIMARY KEY,
+          guild_id TEXT,
           name TEXT NOT NULL,
           description TEXT NOT NULL,
           price NUMERIC(10,2) NOT NULL,
@@ -162,14 +168,71 @@ export async function migrate() {
     await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_id TEXT;');
     await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_duration_amount INTEGER;');
     await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_role_duration_unit TEXT;');
-    await client.query('CREATE INDEX IF NOT EXISTS products_position_idx ON products (position);');
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS store_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
+    if (!hasGuildId) {
+      await client.query('ALTER TABLE products ADD COLUMN IF NOT EXISTS guild_id TEXT;');
+
+      if (fallbackGuildId) {
+        const { rowCount } = await client.query('UPDATE products SET guild_id = $1 WHERE guild_id IS NULL', [fallbackGuildId]);
+        if (rowCount && rowCount > 0) {
+          console.log(
+            `Migração: ${rowCount} produto(s) existente(s) vinculados ao servidor ${fallbackGuildId} (via DISCORD_GUILD_ID). A loja agora é separada por servidor.`
+          );
+        }
+      } else {
+        console.warn(
+          'Migração: coluna guild_id adicionada em products, mas DISCORD_GUILD_ID não está definida — produtos antigos ficaram sem servidor associado e não vão aparecer em nenhuma loja até serem associados manualmente (ou até você definir DISCORD_GUILD_ID e reiniciar).'
+        );
+      }
+    }
+
+    await client.query('DROP INDEX IF EXISTS products_position_idx;');
+    await client.query('CREATE INDEX IF NOT EXISTS products_guild_position_idx ON products (guild_id, position);');
+
+    // ---------- store_settings ----------
+    const { rows: settingsColumnRows } = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'store_settings'`
+    );
+    const settingsExists = settingsColumnRows.length > 0;
+    const settingsHasGuildId = settingsColumnRows.some((c) => c.column_name === 'guild_id');
+
+    if (!settingsExists) {
+      await client.query(`
+        CREATE TABLE store_settings (
+          guild_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          PRIMARY KEY (guild_id, key)
+        );
+      `);
+    } else if (!settingsHasGuildId) {
+      // Esquema antigo (configuração única, sem separação por servidor): migra para chave composta
+      // (guild_id, key), associando a configuração existente ao servidor de DISCORD_GUILD_ID.
+      await client.query('ALTER TABLE store_settings RENAME TO store_settings_legacy');
+      await client.query(`
+        CREATE TABLE store_settings (
+          guild_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          PRIMARY KEY (guild_id, key)
+        );
+      `);
+
+      if (fallbackGuildId) {
+        await client.query(
+          `INSERT INTO store_settings (guild_id, key, value) SELECT $1, key, value FROM store_settings_legacy`,
+          [fallbackGuildId]
+        );
+        console.log(`Migração: configurações da loja vinculadas ao servidor ${fallbackGuildId} (via DISCORD_GUILD_ID).`);
+        await client.query('DROP TABLE store_settings_legacy');
+      } else {
+        // Não apaga os dados antigos: sem DISCORD_GUILD_ID não sabemos a qual servidor associá-los.
+        // Ficam guardados em store_settings_legacy para recuperação manual, se necessário.
+        console.warn(
+          'Migração: configurações antigas da loja (itens por página, permissões, canais de log) NÃO foram migradas porque DISCORD_GUILD_ID não está definida. Os dados antigos foram preservados na tabela store_settings_legacy (não apagados). Configure DISCORD_GUILD_ID e reinicie, ou reconfigure manualmente com /lojaconfig, /permissoes e /logs.'
+        );
+      }
+    }
 
     await client.query('COMMIT');
   } catch (err) {
@@ -179,16 +242,20 @@ export async function migrate() {
     client.release();
   }
 
-  const [{ count }] = await query<{ count: number }>('SELECT COUNT(*)::int AS count FROM products');
+  if (fallbackGuildId) {
+    const [{ count }] = await query<{ count: number }>('SELECT COUNT(*)::int AS count FROM products WHERE guild_id = $1', [
+      fallbackGuildId
+    ]);
 
-  if (count === 0) {
-    let position = 1;
-    for (const product of DEFAULT_PRODUCTS) {
-      await pool.query(
-        'INSERT INTO products (name, description, price, delivery_message, position) VALUES ($1,$2,$3,$4,$5)',
-        [product.name, product.description, product.price, product.deliveryMessage, position++]
-      );
+    if (count === 0) {
+      let position = 1;
+      for (const product of DEFAULT_PRODUCTS) {
+        await pool.query(
+          'INSERT INTO products (guild_id, name, description, price, delivery_message, position) VALUES ($1,$2,$3,$4,$5,$6)',
+          [fallbackGuildId, product.name, product.description, product.price, product.deliveryMessage, position++]
+        );
+      }
+      console.log(`Produtos padrão inseridos para o servidor ${fallbackGuildId} (VIP Bronze, VIP Prata, VIP Ouro).`);
     }
-    console.log('Produtos padrão inseridos no banco de dados (VIP Bronze, VIP Prata, VIP Ouro).');
   }
 }

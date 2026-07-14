@@ -37,13 +37,15 @@ export async function deliverOrder(client: Client, order: Order): Promise<Delive
         `Falha ao atribuir o cargo de entrega (${order.product.deliveryRoleId}) do pedido ${order.id} para o usuário ${order.userId}:`,
         error
       );
-      await logAdmin(client, {
-        title: '⚠️ Falha ao atribuir cargo de entrega',
-        description:
-          `**Pedido:** \`${order.id}\`\n**Comprador:** <@${order.userId}>\n**Produto:** ${order.product.name}\n` +
-          `**Cargo:** <@&${order.product.deliveryRoleId}>\n\nVerifique se o bot tem a permissão **Gerenciar Cargos** e se o cargo dele está posicionado acima do cargo de entrega.`,
-        color: LOG_COLOR.warning
-      });
+      if (order.guildId) {
+        await logAdmin(client, order.guildId, {
+          title: '⚠️ Falha ao atribuir cargo de entrega',
+          description:
+            `**Pedido:** \`${order.id}\`\n**Comprador:** <@${order.userId}>\n**Produto:** ${order.product.name}\n` +
+            `**Cargo:** <@&${order.product.deliveryRoleId}>\n\nVerifique se o bot tem a permissão **Gerenciar Cargos** e se o cargo dele está posicionado acima do cargo de entrega.`,
+          color: LOG_COLOR.warning
+        });
+      }
     }
   } else if (order.product.deliveryRoleId && !order.guildId) {
     console.error(
@@ -69,17 +71,19 @@ export async function deliverOrder(client: Client, order: Order): Promise<Delive
     console.error(`Falha ao enviar DM de confirmação do pedido ${order.id} para o usuário ${order.userId}:`, error);
   }
 
-  await logSale(client, {
-    title: '✅ Pagamento aprovado',
-    description:
-      `**Comprador:** <@${order.userId}> (\`${order.userId}\`)\n**Produto:** ${order.product.name}\n` +
-      `**Valor:** R$ ${formatPrice(order.product.price)}\n**Pedido:** \`${order.id}\`\n**ID pagamento (Mercado Pago):** \`${order.paymentId ?? '—'}\`` +
-      (order.product.deliveryRoleId
-        ? `\n**Cargo entregue:** ${roleGranted ? '✅ Sim' : '❌ Não (verifique o log admin)'}` +
-          (roleExpiresAt ? `\n**Cargo expira em:** ${formatRemaining(roleExpiresAt)}` : '')
-        : ''),
-    color: LOG_COLOR.approved
-  });
+  if (order.guildId) {
+    await logSale(client, order.guildId, {
+      title: '✅ Pagamento aprovado',
+      description:
+        `**Comprador:** <@${order.userId}> (\`${order.userId}\`)\n**Produto:** ${order.product.name}\n` +
+        `**Valor:** R$ ${formatPrice(order.product.price)}\n**Pedido:** \`${order.id}\`\n**ID pagamento (Mercado Pago):** \`${order.paymentId ?? '—'}\`` +
+        (order.product.deliveryRoleId
+          ? `\n**Cargo entregue:** ${roleGranted ? '✅ Sim' : '❌ Não (verifique o log admin)'}` +
+            (roleExpiresAt ? `\n**Cargo expira em:** ${formatRemaining(roleExpiresAt)}` : '')
+          : ''),
+      color: LOG_COLOR.approved
+    });
+  }
 
   return { roleGranted, roleAttempted, dmSent };
 }

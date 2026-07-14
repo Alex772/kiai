@@ -109,6 +109,12 @@ Produtos e pedidos são persistidos em PostgreSQL.
 3. Para rodar localmente (fora do Railway), use a `DATABASE_PUBLIC_URL` do Postgres (proxy `*.proxy.rlwy.net`) na variável `DATABASE_PUBLIC_URL` do seu `.env`.
 4. Não é preciso criar tabelas manualmente: ao iniciar, o bot roda uma migração automática (`CREATE TABLE IF NOT EXISTS ...`) e, se a tabela `products` estiver vazia, insere 3 produtos de exemplo (VIP Bronze, VIP Prata, VIP Ouro). Se você já tinha produtos de uma versão anterior (com ID em texto), a migração converte automaticamente para ID numérico + posição na primeira execução, sem perder os dados.
 
+## Loja separada por servidor (multi-servidor — fase 1)
+
+Produtos, configurações da loja (`/lojaconfig`), permissões (`/permissoes`) e canais de log (`/logs`) agora são **isolados por servidor Discord** — cada servidor tem seu próprio catálogo e configuração, mesmo que o mesmo bot esteja em vários servidores ao mesmo tempo. Um administrador de um servidor não enxerga nem consegue alterar os produtos de outro.
+
+Se você já tinha uma loja rodando antes dessa mudança, a migração automática usa a variável `DISCORD_GUILD_ID` (se estiver configurada) para vincular os dados antigos ao servidor certo, sem perder nada. **Isso é só a base para suporte a múltiplos servidores** — o processamento de pagamento (Mercado Pago) ainda usa uma única credencial global (`MERCADO_PAGO_ACCESS_TOKEN`), compartilhada por todos os servidores onde o bot estiver. Conectar uma conta Mercado Pago própria por servidor é a próxima etapa planejada, ainda não implementada.
+
 ## Posição/ordem dos produtos
 
 Cada produto tem uma posição (1 = primeiro na loja). Ao adicionar um produto numa posição já ocupada, os demais avançam uma posição automaticamente para abrir espaço. Ao editar a posição de um produto existente, os produtos entre a posição antiga e a nova são reordenados sozinhos — sem posições duplicadas ou espaços vazios. Ao remover um produto, os que vinham depois recuam uma posição.

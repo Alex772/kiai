@@ -123,10 +123,10 @@ export async function findOrderByPaymentId(paymentId: string): Promise<Order | u
   return rows[0] ? mapRow(rows[0]) : undefined;
 }
 
-export async function listOrdersByUser(userId: string, limit = 10): Promise<Order[]> {
+export async function listOrdersByUser(userId: string, guildId: string, limit = 10): Promise<Order[]> {
   const rows = await query<OrderRow>(
-    'SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2',
-    [userId, limit]
+    'SELECT * FROM orders WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT $3',
+    [userId, guildId, limit]
   );
   return rows.map(mapRow);
 }
@@ -210,12 +210,12 @@ export async function listExpiredRoleGrants(): Promise<Order[]> {
  * Lista os benefícios (cargos) ativos de um usuário — pedidos aprovados com cargo de entrega que
  * ainda não foi removido. Usado por /meusbeneficios e pelo comando administrativo de consulta.
  */
-export async function listActiveRoleGrantsForUser(userId: string): Promise<Order[]> {
+export async function listActiveRoleGrantsForUser(userId: string, guildId: string): Promise<Order[]> {
   const rows = await query<OrderRow>(
     `SELECT * FROM orders
-     WHERE user_id = $1 AND status = 'approved' AND product_delivery_role_id IS NOT NULL AND role_removed_at IS NULL
+     WHERE user_id = $1 AND guild_id = $2 AND status = 'approved' AND product_delivery_role_id IS NOT NULL AND role_removed_at IS NULL
      ORDER BY role_expires_at ASC NULLS LAST`,
-    [userId]
+    [userId, guildId]
   );
   return rows.map(mapRow);
 }

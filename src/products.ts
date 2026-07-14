@@ -62,38 +62,43 @@ function mapRow(row: ProductRow): Product {
   };
 }
 
-export async function listProducts(): Promise<Product[]> {
-  const rows = await query<ProductRow>('SELECT * FROM products ORDER BY position ASC, id ASC');
+export async function listProducts(guildId: string): Promise<Product[]> {
+  const rows = await query<ProductRow>('SELECT * FROM products WHERE guild_id = $1 ORDER BY position ASC, id ASC', [guildId]);
   return rows.map(mapRow);
 }
 
-export async function findProduct(productId: number): Promise<Product | undefined> {
-  const rows = await query<ProductRow>('SELECT * FROM products WHERE id = $1', [productId]);
+/** Busca um produto garantindo que ele pertence ao servidor informado (isolamento entre lojas). */
+export async function findProduct(guildId: string, productId: number): Promise<Product | undefined> {
+  const rows = await query<ProductRow>('SELECT * FROM products WHERE id = $1 AND guild_id = $2', [productId, guildId]);
   return rows[0] ? mapRow(rows[0]) : undefined;
 }
 
-export async function countProducts(): Promise<number> {
-  const rows = await query<{ count: number }>('SELECT COUNT(*)::int AS count FROM products');
+export async function countProducts(guildId: string): Promise<number> {
+  const rows = await query<{ count: number }>('SELECT COUNT(*)::int AS count FROM products WHERE guild_id = $1', [guildId]);
   return rows[0]?.count ?? 0;
 }
 
-export async function addProduct(input: ProductInput): Promise<Product> {
+export async function addProduct(guildId: string, input: ProductInput): Promise<Product> {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    const { rows: countRows } = await client.query('SELECT COUNT(*)::int AS count FROM products');
+    const { rows: countRows } = await client.query('SELECT COUNT(*)::int AS count FROM products WHERE guild_id = $1', [guildId]);
     const total = countRows[0].count as number;
     const targetPosition = input.position && input.position >= 1 ? Math.min(input.position, total + 1) : total + 1;
 
-    // Abre espaço na posição desejada, empurrando os produtos seguintes uma posição pra frente.
-    await client.query('UPDATE products SET position = position + 1 WHERE position >= $1', [targetPosition]);
+    // Abre espaço na posição desejada, empurrando os produtos seguintes DESSE SERVIDOR uma posição pra frente.
+    await client.query('UPDATE products SET position = position + 1 WHERE guild_id = $1 AND position >= $2', [
+      guildId,
+      targetPosition
+    ]);
 
     const { rows } = await client.query<ProductRow>(
-      `INSERT INTO products (name, description, price, delivery_message, delivery_role_id, delivery_role_duration_amount, delivery_role_duration_unit, position)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      `INSERT INTO products (guild_id, name, description, price, delivery_message, delivery_role_id, delivery_role_duration_amount, delivery_role_duration_unit, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [
+        guildId,
         input.name,
         input.description,
         input.price,
@@ -115,21 +120,27 @@ export async function addProduct(input: ProductInput): Promise<Product> {
   }
 }
 
-export async function removeProduct(productId: number): Promise<boolean> {
+export async function removeProduct(guildId: string, productId: number): Promise<boolean> {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    const { rows } = await client.query<ProductRow>('DELETE FROM products WHERE id = $1 RETURNING *', [productId]);
+    const { rows } = await client.query<ProductRow>('DELETE FROM products WHERE id = $1 AND guild_id = $2 RETURNING *', [
+      productId,
+      guildId
+    ]);
 
     if (rows.length === 0) {
       await client.query('ROLLBACK');
       return false;
     }
 
-    // Fecha o espaço: todo produto que estava depois do removido avança uma posição pra trás.
-    await client.query('UPDATE products SET position = position - 1 WHERE position > $1', [rows[0].position]);
+    // Fecha o espaço: todo produto DESSE SERVIDOR que estava depois do removido recua uma posição.
+    await client.query('UPDATE products SET position = position - 1 WHERE guild_id = $1 AND position > $2', [
+      guildId,
+      rows[0].position
+    ]);
 
     await client.query('COMMIT');
     return true;
@@ -141,15 +152,15 @@ export async function removeProduct(productId: number): Promise<boolean> {
   }
 }
 
-export async function editProduct(productId: number, patch: ProductUpdate): Promise<Product | undefined> {
+export async function editProduct(guildId: string, productId: number, patch: ProductUpdate): Promise<Product | undefined> {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
     const { rows: currentRows } = await client.query<ProductRow>(
-      'SELECT * FROM products WHERE id = $1 FOR UPDATE',
-      [productId]
+      'SELECT * FROM products WHERE id = $1 AND guild_id = $2 FOR UPDATE',
+      [productId, guildId]
     );
 
     if (currentRows.length === 0) {
@@ -161,31 +172,32 @@ export async function editProduct(productId: number, patch: ProductUpdate): Prom
     const currentPosition = current.position as number;
 
     if (patch.position !== undefined && patch.position !== currentPosition) {
-      const { rows: countRows } = await client.query('SELECT COUNT(*)::int AS count FROM products');
+      const { rows: countRows } = await client.query('SELECT COUNT(*)::int AS count FROM products WHERE guild_id = $1', [guildId]);
       const total = countRows[0].count as number;
       const newPosition = Math.max(1, Math.min(patch.position, total));
 
       if (newPosition > currentPosition) {
         // Movendo pra frente na lista: quem estava entre a posição antiga e a nova recua uma posição.
         await client.query(
-          'UPDATE products SET position = position - 1 WHERE position > $1 AND position <= $2',
-          [currentPosition, newPosition]
+          'UPDATE products SET position = position - 1 WHERE guild_id = $1 AND position > $2 AND position <= $3',
+          [guildId, currentPosition, newPosition]
         );
       } else if (newPosition < currentPosition) {
         // Movendo pra trás na lista: quem estava entre a nova posição e a antiga avança uma posição.
         await client.query(
-          'UPDATE products SET position = position + 1 WHERE position >= $1 AND position < $2',
-          [newPosition, currentPosition]
+          'UPDATE products SET position = position + 1 WHERE guild_id = $1 AND position >= $2 AND position < $3',
+          [guildId, newPosition, currentPosition]
         );
       }
 
-      await client.query('UPDATE products SET position = $2 WHERE id = $1', [productId, newPosition]);
+      await client.query('UPDATE products SET position = $3 WHERE id = $1 AND guild_id = $2', [productId, guildId, newPosition]);
     }
 
     await client.query(
-      'UPDATE products SET name=$2, description=$3, price=$4, delivery_message=$5, updated_at=now() WHERE id=$1',
+      'UPDATE products SET name=$3, description=$4, price=$5, delivery_message=$6, updated_at=now() WHERE id=$1 AND guild_id=$2',
       [
         productId,
+        guildId,
         patch.name ?? current.name,
         patch.description ?? current.description,
         patch.price ?? current.price,
@@ -193,7 +205,10 @@ export async function editProduct(productId: number, patch: ProductUpdate): Prom
       ]
     );
 
-    const { rows: finalRows } = await client.query<ProductRow>('SELECT * FROM products WHERE id = $1', [productId]);
+    const { rows: finalRows } = await client.query<ProductRow>('SELECT * FROM products WHERE id = $1 AND guild_id = $2', [
+      productId,
+      guildId
+    ]);
 
     await client.query('COMMIT');
     return mapRow(finalRows[0]);
@@ -209,10 +224,10 @@ export async function editProduct(productId: number, patch: ProductUpdate): Prom
  * Define (ou remove, passando null) o cargo do Discord entregue automaticamente
  * quando o pagamento desse produto for aprovado.
  */
-export async function setProductDeliveryRole(productId: number, roleId: string | null): Promise<Product | undefined> {
+export async function setProductDeliveryRole(guildId: string, productId: number, roleId: string | null): Promise<Product | undefined> {
   const rows = await query<ProductRow>(
-    'UPDATE products SET delivery_role_id = $2, updated_at = now() WHERE id = $1 RETURNING *',
-    [productId, roleId]
+    'UPDATE products SET delivery_role_id = $3, updated_at = now() WHERE id = $1 AND guild_id = $2 RETURNING *',
+    [productId, guildId, roleId]
   );
   return rows[0] ? mapRow(rows[0]) : undefined;
 }
@@ -222,12 +237,13 @@ export async function setProductDeliveryRole(productId: number, roleId: string |
  * antes de ser removido automaticamente. Sem duração definida, o cargo é permanente.
  */
 export async function setProductDeliveryRoleDuration(
+  guildId: string,
   productId: number,
   duration: Duration | null
 ): Promise<Product | undefined> {
   const rows = await query<ProductRow>(
-    'UPDATE products SET delivery_role_duration_amount = $2, delivery_role_duration_unit = $3, updated_at = now() WHERE id = $1 RETURNING *',
-    [productId, duration?.amount ?? null, duration?.unit ?? null]
+    'UPDATE products SET delivery_role_duration_amount = $3, delivery_role_duration_unit = $4, updated_at = now() WHERE id = $1 AND guild_id = $2 RETURNING *',
+    [productId, guildId, duration?.amount ?? null, duration?.unit ?? null]
   );
   return rows[0] ? mapRow(rows[0]) : undefined;
 }
