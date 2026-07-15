@@ -1,5 +1,6 @@
 import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v10';
+import type { Client } from 'discord.js';
 import { commands } from './commands.js';
 import { config } from './config.js';
 
@@ -23,4 +24,36 @@ export async function registerSlashCommands() {
     count: commands.length,
     scope: config.discordGuildId ? `guild:${config.discordGuildId}` : 'global'
   };
+}
+
+/**
+ * Remove comandos "de servidor" deixados para trás de quando o bot usava DISCORD_GUILD_ID
+ * (registro por servidor). Sem isso, um servidor que já teve comandos registrados dessa forma
+ * antiga passa a ver cada comando duplicado (a versão antiga de servidor + a nova global
+ * coexistindo). Só roda quando o bot está em modo global (sem DISCORD_GUILD_ID definida) — se
+ * DISCORD_GUILD_ID estiver definida, os comandos de servidor são os comandos "de verdade" e não
+ * devem ser apagados. Precisa rodar depois do bot conectar (client.guilds.cache só existe então).
+ */
+export async function clearStaleGuildCommands(client: Client) {
+  if (config.discordGuildId) return; // modo servidor único: nada a limpar
+
+  const rest = new REST({ version: '10' }).setToken(config.discordToken);
+  let cleared = 0;
+
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const existing = (await rest.get(Routes.applicationGuildCommands(config.discordClientId, guild.id))) as unknown[];
+      if (existing.length === 0) continue;
+
+      await rest.put(Routes.applicationGuildCommands(config.discordClientId, guild.id), { body: [] });
+      cleared++;
+      console.log(`Removidos ${existing.length} comando(s) "de servidor" antigo(s) em ${guild.name} (${guild.id}) — agora só os globais valem lá.`);
+    } catch (error) {
+      console.error(`Falha ao limpar comandos de servidor antigos em ${guild.id}:`, error);
+    }
+  }
+
+  if (cleared > 0) {
+    console.log(`Limpeza concluída: ${cleared} servidor(es) tinham comandos duplicados e foram corrigidos.`);
+  }
 }

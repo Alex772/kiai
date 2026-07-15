@@ -52,7 +52,7 @@ import {
   setProductDeliveryRoleDuration,
   type Product
 } from './products.js';
-import { registerSlashCommands } from './registerSlashCommands.js';
+import { registerSlashCommands, clearStaleGuildCommands } from './registerSlashCommands.js';
 import { startHttpServer, registerPendingOAuthState } from './server.js';
 import { getStoreSettings, updateStoreSettings } from './settings.js';
 import {
@@ -395,8 +395,14 @@ function buildEditProductOverviewReply(product: Product) {
   return { components: [container], flags: MessageFlags.IsComponentsV2 as MessageFlags.IsComponentsV2 };
 }
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot conectado como ${readyClient.user.tag}`);
+
+  try {
+    await clearStaleGuildCommands(readyClient);
+  } catch (error) {
+    console.error('Falha ao limpar comandos de servidor antigos:', error);
+  }
 });
 
 // Autocomplete
