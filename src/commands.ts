@@ -109,5 +109,12 @@ export const commands = [
     .addBooleanOption((o) => o.setName('remover_vendas').setDescription('Remove o canal de log de vendas configurado').setRequired(false))
     .addBooleanOption((o) =>
       o.setName('remover_admin').setDescription('Remove o canal de log administrativo configurado').setRequired(false)
-    )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('mercadopago')
+    .setDescription('Gerencia a conexão da conta Mercado Pago deste servidor. (Apenas dono do servidor)')
+    .addSubcommand((sub) => sub.setName('conectar').setDescription('Gera o link para conectar a conta Mercado Pago deste servidor'))
+    .addSubcommand((sub) => sub.setName('status').setDescription('Mostra o status da conexão Mercado Pago deste servidor'))
+    .addSubcommand((sub) => sub.setName('desconectar').setDescription('Desconecta a conta Mercado Pago deste servidor'))
 ].map((command) => command.toJSON());

@@ -35,8 +35,12 @@ import {
   createCardCheckoutLink,
   resolveOrderPaymentStatus,
   getPaymentDetails,
-  searchPaymentByExternalReference
+  searchPaymentByExternalReference,
+  buildAuthorizationUrl,
+  isOAuthConfigured,
+  refreshConnection
 } from './mercadoPago.js';
+import { getMercadoPagoConnection, deleteMercadoPagoConnection, listConnectionsExpiringSoon } from './mpConnections.js';
 import {
   addProduct,
   countProducts,
@@ -48,6 +52,8 @@ import {
   setProductDeliveryRoleDuration,
   type Product
 } from './products.js';
+import { registerSlashCommands } from './registerSlashCommands.js';
+import { startHttpServer, registerPendingOAuthState } from './server.js';
 import { getStoreSettings, updateStoreSettings } from './settings.js';
 import {
   createOrder,
@@ -63,8 +69,6 @@ import {
   ORDER_EXPIRATION_MINUTES,
   type Order
 } from './store.js';
-import { registerSlashCommands } from './registerSlashCommands.js';
-import { startHttpServer } from './server.js';
 import { migrate } from './db.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -934,6 +938,102 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       return;
     }
+
+    // /mercadopago
+    if (interaction.commandName === 'mercadopago') {
+      if (!isGuildOwner(interaction)) {
+        await interaction.reply({
+          content: 'Apenas o dono do servidor pode gerenciar a conexão com o Mercado Pago.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      if (!interaction.guildId) {
+        await interaction.editReply('Esse comando só funciona dentro de um servidor.');
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'conectar') {
+        if (!isOAuthConfigured()) {
+          await interaction.editReply(
+            'A conexão de contas por servidor ainda não está habilitada neste bot (faltam `MERCADO_PAGO_CLIENT_ID`/`MERCADO_PAGO_CLIENT_SECRET` configurados). Fale com quem administra o bot.'
+          );
+          return;
+        }
+
+        if (!config.publicBaseUrl) {
+          await interaction.editReply('`PUBLIC_BASE_URL` não está configurado no bot — não é possível gerar o link de conexão.');
+          return;
+        }
+
+        let authUrl: string;
+        try {
+          const state = registerPendingOAuthState(interaction.guildId, interaction.user.id);
+          authUrl = buildAuthorizationUrl(state);
+        } catch (error) {
+          await interaction.editReply(toUserErrorMessage(error));
+          return;
+        }
+
+        const container = new ContainerBuilder();
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## 🔗 Conectar conta Mercado Pago\nClique no botão abaixo e faça login com a conta Mercado Pago que vai receber os pagamentos desta loja. O link expira em 10 minutos.`
+          )
+        );
+        container.addActionRowComponents(
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setLabel('Conectar Mercado Pago').setStyle(ButtonStyle.Link).setURL(authUrl)
+          )
+        );
+
+        await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+        return;
+      }
+
+      if (sub === 'status') {
+        const connection = await getMercadoPagoConnection(interaction.guildId);
+
+        if (!connection) {
+          await interaction.editReply(
+            `## 🔌 Mercado Pago — não conectado\nEste servidor ainda não conectou uma conta própria.${config.mercadoPagoAccessToken ? ' Os pagamentos estão usando o token global padrão do bot.' : ' Nenhum pagamento pode ser processado até conectar uma conta com `/mercadopago conectar`.'}`
+          );
+          return;
+        }
+
+        const expiresAt = new Date(connection.expiresAt);
+        await interaction.editReply(
+          `## ✅ Mercado Pago conectado\n**Conta:** \`${connection.mpUserId ?? '—'}\`\n**Conectado por:** <@${connection.connectedBy ?? '—'}>\n**Renovação automática até:** ${expiresAt.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\n\nO token é renovado automaticamente antes de vencer. Se algo der errado, rode \`/mercadopago conectar\` de novo.`
+        );
+        return;
+      }
+
+      if (sub === 'desconectar') {
+        const removed = await deleteMercadoPagoConnection(interaction.guildId);
+
+        if (!removed) {
+          await interaction.editReply('Este servidor não tinha nenhuma conta Mercado Pago conectada.');
+          return;
+        }
+
+        await logAdmin(client, interaction.guildId, {
+          actor: interaction.user,
+          title: '🔌 Conta Mercado Pago desconectada',
+          description: `A conexão da conta Mercado Pago deste servidor foi removida por <@${interaction.user.id}>.${config.mercadoPagoAccessToken ? ' Os pagamentos voltam a usar o token global padrão do bot.' : ' Nenhum pagamento pode ser processado até conectar uma conta de novo.'}`,
+          color: LOG_COLOR.warning
+        });
+
+        await interaction.editReply(
+          `## 🔌 Desconectado\nA conta Mercado Pago deste servidor foi desconectada.${config.mercadoPagoAccessToken ? ' Os pagamentos voltam a usar o token global padrão do bot.' : ' Use `/mercadopago conectar` para reconectar quando quiser vender de novo.'}`
+        );
+        return;
+      }
+    }
   } catch (error) {
     console.error('Erro ao processar comando slash:', error);
     await replyError(interaction, error);
@@ -1531,6 +1631,35 @@ async function expireRoleGrantsJob() {
   }
 }
 
+/**
+ * Renova proativamente as conexões Mercado Pago que estão perto de vencer (não depende só de
+ * alguém comprar algo pra disparar a renovação). Se a renovação falhar, avisa o dono do servidor
+ * no log admin — provavelmente a conta revogou o acesso e precisa reconectar.
+ */
+async function renewExpiringMercadoPagoConnectionsJob() {
+  try {
+    const expiringSoon = await listConnectionsExpiringSoon(7);
+
+    for (const connection of expiringSoon) {
+      try {
+        await refreshConnection(connection);
+        console.log(`Conexão Mercado Pago do servidor ${connection.guildId} renovada automaticamente.`);
+      } catch (error) {
+        console.error(`Falha ao renovar conexão Mercado Pago do servidor ${connection.guildId}:`, error);
+        await logAdmin(client, connection.guildId, {
+          title: '⚠️ Conexão Mercado Pago não pôde ser renovada',
+          description:
+            `A conexão da conta Mercado Pago deste servidor está perto de vencer (ou já venceu) e não foi possível renovar automaticamente. ` +
+            `Provavelmente a autorização foi revogada do lado do Mercado Pago. Rode \`/mercadopago conectar\` de novo pra não travar as vendas.`,
+          color: LOG_COLOR.warning
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Falha ao rodar a renovação automática de conexões Mercado Pago:', error);
+  }
+}
+
 async function cleanupExpiredOrdersJob() {
   try {
     const cancelled = await cancelExpiredOrders();
@@ -1576,7 +1705,8 @@ async function pollPendingPaymentsJob() {
       if (!order.paymentId) continue;
 
       try {
-        const status = await getPaymentDetails(order.paymentId).then((d) => d.status);
+        if (!order.guildId) continue;
+        const status = await getPaymentDetails(order.paymentId, order.guildId).then((d) => d.status);
 
         if (status === 'approved') {
           const updated = await updateOrder(order.id, { status: 'approved' });
@@ -1596,7 +1726,8 @@ async function pollPendingPaymentsJob() {
 
     for (const order of pendingCard) {
       try {
-        const found = await searchPaymentByExternalReference(order.id);
+        if (!order.guildId) continue;
+        const found = await searchPaymentByExternalReference(order.id, order.guildId);
         if (!found) continue;
 
         if (found.status === 'approved') {
@@ -1627,6 +1758,9 @@ if (missingEnv.length > 0) {
 
   await expireRoleGrantsJob();
   setInterval(expireRoleGrantsJob, ROLE_EXPIRATION_INTERVAL_MS);
+
+  await renewExpiringMercadoPagoConnectionsJob();
+  setInterval(renewExpiringMercadoPagoConnectionsJob, 24 * 60 * 60_000); // roda 1x por dia
 
   if (config.autoRegisterCommands) {
     try {

@@ -1,11 +1,8 @@
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import { MercadoPagoConfig, OAuth, Payment, Preference } from 'mercadopago';
 import { config } from './config.js';
 import { describeError } from './errors.js';
+import { getMercadoPagoConnection, saveMercadoPagoConnection, type MercadoPagoConnection } from './mpConnections.js';
 import { ORDER_EXPIRATION_MINUTES, type Order } from './store.js';
-
-const client = new MercadoPagoConfig({ accessToken: config.mercadoPagoAccessToken });
-const paymentClient = new Payment(client);
-const preferenceClient = new Preference(client);
 
 type PixPaymentResponse = {
   id?: number;
@@ -50,7 +47,178 @@ function resolveNotificationUrl() {
   return baseUrl ? `${baseUrl.origin}/webhooks/mercado-pago` : undefined;
 }
 
+function resolveRedirectUri(): string | undefined {
+  const baseUrl = resolveBaseUrl();
+  return baseUrl ? `${baseUrl.origin}/mercadopago/callback` : undefined;
+}
+
+// ── Resolução de credenciais por servidor (com fallback pro token global legado) ──────────────
+
+/**
+ * Retorna o Access Token a usar para as chamadas desse servidor: a conta Mercado Pago que o
+ * dono conectou via /conectarmercadopago (renovando sozinho se estiver perto de vencer), ou,
+ * se o servidor ainda não conectou nada, o MERCADO_PAGO_ACCESS_TOKEN global (comportamento
+ * anterior, mantido por compatibilidade).
+ */
+async function resolveAccessToken(guildId: string): Promise<string> {
+  const connection = await getMercadoPagoConnection(guildId);
+
+  if (!connection) {
+    if (!config.mercadoPagoAccessToken) {
+      throw new Error(
+        'Este servidor ainda não conectou uma conta Mercado Pago. Peça para o dono do servidor rodar /conectarmercadopago.'
+      );
+    }
+    return config.mercadoPagoAccessToken;
+  }
+
+  const expiresInMs = new Date(connection.expiresAt).getTime() - Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
+
+  if (expiresInMs <= oneDayMs) {
+    try {
+      const refreshed = await refreshConnection(connection);
+      return refreshed.accessToken;
+    } catch (error) {
+      console.error(`Falha ao renovar automaticamente a conexão Mercado Pago do servidor ${guildId}:`, describeError(error));
+      // Se ainda não venceu de fato, tenta usar o token atual mesmo assim; se já venceu, propaga o erro.
+      if (expiresInMs > 0) return connection.accessToken;
+      throw new Error(
+        'A conexão com o Mercado Pago deste servidor expirou e não foi possível renovar automaticamente. Peça para o dono rodar /conectarmercadopago de novo.'
+      );
+    }
+  }
+
+  return connection.accessToken;
+}
+
+function buildClients(accessToken: string) {
+  const mpConfig = new MercadoPagoConfig({ accessToken });
+  return { payment: new Payment(mpConfig), preference: new Preference(mpConfig), oauth: new OAuth(mpConfig) };
+}
+
+// ── OAuth: conectar a conta Mercado Pago de um servidor ───────────────────────────────────────
+
+export function isOAuthConfigured(): boolean {
+  return Boolean(config.mercadoPagoClientId && config.mercadoPagoClientSecret);
+}
+
+/** Monta a URL que o dono do servidor deve abrir para autorizar o bot a operar em nome da conta dele. */
+export function buildAuthorizationUrl(state: string): string {
+  const redirectUri = resolveRedirectUri();
+
+  if (!config.mercadoPagoClientId || !redirectUri) {
+    throw new Error('MERCADO_PAGO_CLIENT_ID e/ou PUBLIC_BASE_URL não configurados — não é possível gerar o link de conexão.');
+  }
+
+  const { oauth } = buildClients(config.mercadoPagoAccessToken || 'unused');
+
+  return oauth.getAuthorizationURL({
+    options: {
+      client_id: config.mercadoPagoClientId,
+      redirect_uri: redirectUri,
+      state
+    }
+  });
+}
+
+type OAuthTokenResult = {
+  accessToken: string;
+  refreshToken: string;
+  mpUserId?: string;
+  publicKey?: string;
+  expiresAt: string;
+};
+
+/** Troca o código de autorização (válido por só 10 minutos) pelos tokens da conta conectada. */
+export async function exchangeAuthorizationCode(code: string, guildId: string, connectedBy: string): Promise<OAuthTokenResult> {
+  const redirectUri = resolveRedirectUri();
+
+  if (!config.mercadoPagoClientId || !config.mercadoPagoClientSecret || !redirectUri) {
+    throw new Error('MERCADO_PAGO_CLIENT_ID, MERCADO_PAGO_CLIENT_SECRET e PUBLIC_BASE_URL precisam estar configurados.');
+  }
+
+  const { oauth } = buildClients(config.mercadoPagoAccessToken || 'unused');
+
+  try {
+    const response = await oauth.create({
+      body: {
+        client_secret: config.mercadoPagoClientSecret,
+        client_id: config.mercadoPagoClientId,
+        code,
+        redirect_uri: redirectUri
+      }
+    });
+
+    const result: OAuthTokenResult = {
+      accessToken: response.access_token as string,
+      refreshToken: response.refresh_token as string,
+      mpUserId: response.user_id ? String(response.user_id) : undefined,
+      publicKey: response.public_key ?? undefined,
+      expiresAt: new Date(Date.now() + Number(response.expires_in ?? 15_552_000) * 1000).toISOString()
+    };
+
+    await saveMercadoPagoConnection({
+      guildId,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      mpUserId: result.mpUserId,
+      publicKey: result.publicKey,
+      connectedBy,
+      expiresAt: result.expiresAt
+    });
+
+    return result;
+  } catch (error) {
+    console.error(`Falha ao trocar código de autorização por token (servidor ${guildId}):`, describeError(error));
+    throw new Error(`Mercado Pago recusou a conexão: ${describeError(error)}`);
+  }
+}
+
+/** Renova uma conexão existente usando o refresh_token, salvando o novo par de tokens. */
+export async function refreshConnection(connection: MercadoPagoConnection): Promise<OAuthTokenResult> {
+  if (!config.mercadoPagoClientId || !config.mercadoPagoClientSecret) {
+    throw new Error('MERCADO_PAGO_CLIENT_ID e MERCADO_PAGO_CLIENT_SECRET precisam estar configurados para renovar conexões.');
+  }
+
+  const { oauth } = buildClients(connection.accessToken);
+
+  const response = await oauth.refresh({
+    body: {
+      client_secret: config.mercadoPagoClientSecret,
+      client_id: config.mercadoPagoClientId,
+      refresh_token: connection.refreshToken
+    }
+  });
+
+  const result: OAuthTokenResult = {
+    accessToken: response.access_token as string,
+    refreshToken: (response.refresh_token as string) ?? connection.refreshToken,
+    mpUserId: response.user_id ? String(response.user_id) : connection.mpUserId,
+    publicKey: response.public_key ?? connection.publicKey,
+    expiresAt: new Date(Date.now() + Number(response.expires_in ?? 15_552_000) * 1000).toISOString()
+  };
+
+  await saveMercadoPagoConnection({
+    guildId: connection.guildId,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+    mpUserId: result.mpUserId,
+    publicKey: result.publicKey,
+    connectedBy: connection.connectedBy,
+    expiresAt: result.expiresAt
+  });
+
+  return result;
+}
+
+// ── Pagamentos ──────────────────────────────────────────────────────────────────────────────
+
 export async function createPixPayment(order: Order) {
+  if (!order.guildId) throw new Error('Pedido sem guildId — não é possível determinar as credenciais do Mercado Pago.');
+
+  const accessToken = await resolveAccessToken(order.guildId);
+  const { payment: paymentClient } = buildClients(accessToken);
   const notificationUrl = resolveNotificationUrl();
 
   try {
@@ -89,6 +257,10 @@ export async function createPixPayment(order: Order) {
  * Mercado Pago — o bot nunca vê nem manipula número de cartão, CVV, etc.
  */
 export async function createCardCheckoutLink(order: Order): Promise<{ checkoutUrl?: string }> {
+  if (!order.guildId) throw new Error('Pedido sem guildId — não é possível determinar as credenciais do Mercado Pago.');
+
+  const accessToken = await resolveAccessToken(order.guildId);
+  const { preference: preferenceClient } = buildClients(accessToken);
   const baseUrl = resolveBaseUrl();
   const notificationUrl = resolveNotificationUrl();
 
@@ -130,19 +302,19 @@ export async function createCardCheckoutLink(order: Order): Promise<{ checkoutUr
   }
 }
 
-export async function getPaymentDetails(paymentId: string): Promise<{ status?: string; externalReference?: string }> {
+export async function getPaymentDetails(
+  paymentId: string,
+  guildId: string
+): Promise<{ status?: string; externalReference?: string }> {
   try {
+    const accessToken = await resolveAccessToken(guildId);
+    const { payment: paymentClient } = buildClients(accessToken);
     const response = await paymentClient.get({ id: paymentId });
     return { status: response.status, externalReference: response.external_reference ?? undefined };
   } catch (error) {
-    console.error(`Falha ao consultar pagamento ${paymentId} no Mercado Pago:`, describeError(error));
+    console.error(`Falha ao consultar pagamento ${paymentId} no Mercado Pago (servidor ${guildId}):`, describeError(error));
     return {};
   }
-}
-
-export async function getPaymentStatus(paymentId: string) {
-  const details = await getPaymentDetails(paymentId);
-  return details.status;
 }
 
 /**
@@ -150,14 +322,19 @@ export async function getPaymentStatus(paymentId: string) {
  * cartão, já que só descobrimos o ID do pagamento da Mercado Pago depois que o comprador termina
  * o checkout (diferente do PIX, que já retorna o ID na hora de criar).
  */
-export async function searchPaymentByExternalReference(orderId: string): Promise<{ id: string; status?: string } | undefined> {
+export async function searchPaymentByExternalReference(
+  orderId: string,
+  guildId: string
+): Promise<{ id: string; status?: string } | undefined> {
   try {
+    const accessToken = await resolveAccessToken(guildId);
+    const { payment: paymentClient } = buildClients(accessToken);
     const response = await paymentClient.search({ options: { external_reference: orderId, sort: 'date_created', criteria: 'desc' } });
     const first = response.results?.[0];
     if (!first?.id) return undefined;
     return { id: String(first.id), status: first.status };
   } catch (error) {
-    console.error(`Falha ao buscar pagamento pelo external_reference ${orderId}:`, describeError(error));
+    console.error(`Falha ao buscar pagamento pelo external_reference ${orderId} (servidor ${guildId}):`, describeError(error));
     return undefined;
   }
 }
@@ -167,11 +344,13 @@ export async function searchPaymentByExternalReference(orderId: string): Promise
  * conhecido) quanto para cartão (paymentId só existe depois que o comprador termina o checkout).
  */
 export async function resolveOrderPaymentStatus(order: Order): Promise<{ status?: string; paymentId?: string }> {
+  if (!order.guildId) return {};
+
   if (order.paymentId) {
-    const details = await getPaymentDetails(order.paymentId);
+    const details = await getPaymentDetails(order.paymentId, order.guildId);
     return { status: details.status, paymentId: order.paymentId };
   }
 
-  const found = await searchPaymentByExternalReference(order.id);
+  const found = await searchPaymentByExternalReference(order.id, order.guildId);
   return found ? { status: found.status, paymentId: found.id } : {};
 }

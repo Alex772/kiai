@@ -16,6 +16,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/lojaconfig`: configura título, descrição e quantidade de itens por página da loja. Sem argumentos, mostra a configuração atual.
 - `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
 - `/logs`: define os canais de log da loja (veja a seção "Logs" abaixo). Sem argumentos, mostra a configuração atual.
+- `/mercadopago conectar|status|desconectar` (dono do servidor): conecta a conta Mercado Pago própria deste servidor (veja a seção "Loja separada por servidor" abaixo).
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago, confirma a assinatura, e libera a entrega (cargo + DM) quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
@@ -109,11 +110,32 @@ Produtos e pedidos são persistidos em PostgreSQL.
 3. Para rodar localmente (fora do Railway), use a `DATABASE_PUBLIC_URL` do Postgres (proxy `*.proxy.rlwy.net`) na variável `DATABASE_PUBLIC_URL` do seu `.env`.
 4. Não é preciso criar tabelas manualmente: ao iniciar, o bot roda uma migração automática (`CREATE TABLE IF NOT EXISTS ...`) e, se a tabela `products` estiver vazia, insere 3 produtos de exemplo (VIP Bronze, VIP Prata, VIP Ouro). Se você já tinha produtos de uma versão anterior (com ID em texto), a migração converte automaticamente para ID numérico + posição na primeira execução, sem perder os dados.
 
-## Loja separada por servidor (multi-servidor — fase 1)
+## Loja separada por servidor (multi-servidor)
 
-Produtos, configurações da loja (`/lojaconfig`), permissões (`/permissoes`) e canais de log (`/logs`) agora são **isolados por servidor Discord** — cada servidor tem seu próprio catálogo e configuração, mesmo que o mesmo bot esteja em vários servidores ao mesmo tempo. Um administrador de um servidor não enxerga nem consegue alterar os produtos de outro.
+Produtos, configurações da loja (`/lojaconfig`), permissões (`/permissoes`) e canais de log (`/logs`) são **isolados por servidor Discord** — cada servidor tem seu próprio catálogo e configuração, mesmo com o mesmo bot em vários servidores ao mesmo tempo.
 
-Se você já tinha uma loja rodando antes dessa mudança, a migração automática usa a variável `DISCORD_GUILD_ID` (se estiver configurada) para vincular os dados antigos ao servidor certo, sem perder nada. **Isso é só a base para suporte a múltiplos servidores** — o processamento de pagamento (Mercado Pago) ainda usa uma única credencial global (`MERCADO_PAGO_ACCESS_TOKEN`), compartilhada por todos os servidores onde o bot estiver. Conectar uma conta Mercado Pago própria por servidor é a próxima etapa planejada, ainda não implementada.
+### Fase 2: cada servidor conecta sua própria conta Mercado Pago
+
+Use `/mercadopago conectar` (dono do servidor) para vincular a conta Mercado Pago que vai **receber os pagamentos daquele servidor especificamente** — sem precisar compartilhar nenhum token com você. É um fluxo OAuth: o dono clica num link, faz login na própria conta Mercado Pago dele, autoriza, pronto.
+
+- `/mercadopago conectar` — gera o link de autorização (válido por 10 minutos).
+- `/mercadopago status` — mostra se está conectado, com qual conta, e até quando a conexão é válida.
+- `/mercadopago desconectar` — remove a conexão (volta a usar o token global do bot, se houver).
+
+**Configuração necessária no bot (uma vez só, feita por quem administra o bot, não por cada servidor):**
+1. Em [mercadopago.com.br/developers/panel/app](https://www.mercadopago.com.br/developers/panel/app), crie/edite sua aplicação → habilite **OAuth** → configure a URL de redirecionamento como `https://SEU_DOMINIO/mercadopago/callback` (mesmo domínio de `PUBLIC_BASE_URL`).
+2. Copie o **Client ID** e o **Client Secret** dessa aplicação (diferentes do Access Token comum) e configure `MERCADO_PAGO_CLIENT_ID` / `MERCADO_PAGO_CLIENT_SECRET` no Railway.
+3. Gere uma chave aleatória para criptografar os tokens guardados no banco: `openssl rand -hex 32`, e configure como `TOKEN_ENCRYPTION_KEY`.
+
+**Segurança dos tokens conectados:**
+- Os tokens de cada servidor ficam **criptografados** (AES-256-GCM) no banco — nunca em texto puro.
+- O token de acesso dura 6 meses e é renovado automaticamente: tanto na hora de processar um pagamento (se estiver perto de vencer), quanto por um job diário que verifica todas as conexões com menos de 7 dias de validade. Se a renovação falhar (ex: a conta revogou o acesso), o dono é avisado no canal de log admin.
+- Um servidor que ainda não conectou nenhuma conta usa automaticamente o `MERCADO_PAGO_ACCESS_TOKEN` global do bot (comportamento anterior, mantido por compatibilidade) — ou fica sem processar pagamentos, se essa variável também não estiver configurada.
+- O link de conexão usa um `state` de uso único e validade de 10 minutos (proteção contra CSRF) — ninguém consegue interceptar ou reaproveitar o link de outro servidor.
+
+### O que ainda falta (fase 3, não implementada)
+
+Comissão automática por venda (split de pagamento) usando `marketplace_fee`/`application_fee` do Mercado Pago — hoje, mesmo com contas conectadas por servidor, 100% do valor vai para a conta conectada. A divisão automática é a próxima etapa planejada.
 
 ## Posição/ordem dos produtos
 

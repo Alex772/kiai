@@ -234,6 +234,21 @@ export async function migrate() {
       }
     }
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS guild_mp_connections (
+        guild_id TEXT PRIMARY KEY,
+        access_token_encrypted TEXT NOT NULL,
+        refresh_token_encrypted TEXT NOT NULL,
+        mp_user_id TEXT,
+        public_key TEXT,
+        connected_by TEXT,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    await client.query('CREATE INDEX IF NOT EXISTS guild_mp_connections_mp_user_id_idx ON guild_mp_connections (mp_user_id);');
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

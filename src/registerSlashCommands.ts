@@ -12,6 +12,13 @@ export async function registerSlashCommands() {
 
   await rest.put(route, { body: commands });
 
+  if (config.discordGuildId) {
+    console.warn(
+      `AVISO: comandos registrados apenas no servidor ${config.discordGuildId} (DISCORD_GUILD_ID definida). ` +
+        'Se o bot estiver ou for entrar em outros servidores, remova a variável DISCORD_GUILD_ID do Railway para registrar os comandos globalmente (aparecem em todo servidor, mas a primeira propagação pode levar até 1h).'
+    );
+  }
+
   return {
     count: commands.length,
     scope: config.discordGuildId ? `guild:${config.discordGuildId}` : 'global'

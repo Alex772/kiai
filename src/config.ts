@@ -35,6 +35,8 @@ export const config = {
   mercadoPagoAccessToken: readEnv('MERCADO_PAGO_ACCESS_TOKEN') ?? '',
   mercadoPagoWebhookSecret: readEnv('MERCADO_PAGO_WEBHOOK_SECRET'),
   mercadoPagoPayerEmail: readEnv('MERCADO_PAGO_PAYER_EMAIL'),
+  mercadoPagoClientId: readEnv('MERCADO_PAGO_CLIENT_ID'),
+  mercadoPagoClientSecret: readEnv('MERCADO_PAGO_CLIENT_SECRET'),
   publicBaseUrl: readEnv('PUBLIC_BASE_URL'),
   currency: readEnv('STORE_CURRENCY') ?? 'BRL',
   adminRoleId: readEnv('ADMIN_ROLE_ID'),
