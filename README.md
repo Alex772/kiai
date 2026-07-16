@@ -141,6 +141,49 @@ Comissão automática por venda (split de pagamento) usando `marketplace_fee`/`a
 
 Cada produto tem uma posição (1 = primeiro na loja). Ao adicionar um produto numa posição já ocupada, os demais avançam uma posição automaticamente para abrir espaço. Ao editar a posição de um produto existente, os produtos entre a posição antiga e a nova são reordenados sozinhos — sem posições duplicadas ou espaços vazios. Ao remover um produto, os que vinham depois recuam uma posição.
 
+## Estrutura do projeto
+
+O `index.ts` é só o ponto de entrada (conecta ao Discord, sobe o servidor HTTP, agenda os jobs). O resto fica organizado por responsabilidade:
+
+```
+src/
+  client.ts                     Instância do Client do Discord (compartilhada)
+  permissions.ts                Checagens de permissão (dono/admin/moderador)
+  orderDisplay.ts                Formatação de texto de pedidos/benefícios
+  orderService.ts                Criação de pedidos (PIX e cartão)
+  jobs.ts                        Todos os jobs periódicos (limpeza, verificação, expiração, renovação)
+
+  views/                         Monta as telas (containers/botões) sem lógica de negócio
+    lojaView.ts                    /loja com paginação
+    paymentViews.ts                Telas de pagamento (escolha, PIX, cartão)
+    editProductView.ts             Tela de edição de produto
+
+  handlers/                      Registram os listeners de interação do Discord
+    slashCommands.ts               Roteador dos comandos slash
+    autocomplete.ts                Autocomplete de produtos/pedidos
+    selectMenus.ts                 Menu de seleção de produto (editar)
+    roleSelectMenus.ts             Menu de seleção de cargo (editar)
+    modals.ts                      Formulários (editar produto, duração, ir pra página)
+    buttons.ts                     Roteador de botões
+    commands/                      Um arquivo por grupo de comando
+      storeCommands.ts               /loja /comprar
+      orderCommands.ts               /pedido /pedidos /meusbeneficios /usuario
+      productCommands.ts             /addproduto /editarproduto /removerproduto
+      configCommands.ts              /lojaconfig /permissoes /logs
+      mercadoPagoCommands.ts         /mercadopago
+    buttons/                        Um arquivo por grupo de botão
+      editProductButtons.ts          Botões da tela de editar produto
+      lojaButtons.ts                  Botões de paginação da loja
+      paymentButtons.ts               Botões de comprar/verificar pagamento
+
+  db.ts, products.ts, store.ts, settings.ts, mpConnections.ts    Acesso ao banco de dados
+  mercadoPago.ts, tokenCrypto.ts                                  Integração com Mercado Pago
+  logging.ts, delivery.ts, duration.ts, format.ts                 Utilitários
+  server.ts                                                       Servidor HTTP (webhook, OAuth, healthcheck)
+```
+
+Pra achar onde um comando específico é tratado: `handlers/slashCommands.ts` mostra o roteamento, e cada `handlers/commands/*.ts` tem só os comandos daquele grupo.
+
 ## Configuração local
 
 1. Copie `.env.example` para `.env` e preencha as variáveis.
