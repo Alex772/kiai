@@ -32,6 +32,7 @@ export const config = {
   discordToken: readEnv('DISCORD_TOKEN') ?? '',
   discordClientId: readEnv('DISCORD_CLIENT_ID') ?? '',
   discordGuildId: readEnv('DISCORD_GUILD_ID'),
+  botOwnerId: readEnv('BOT_OWNER_ID'),
   mercadoPagoAccessToken: readEnv('MERCADO_PAGO_ACCESS_TOKEN') ?? '',
   mercadoPagoWebhookSecret: readEnv('MERCADO_PAGO_WEBHOOK_SECRET'),
   mercadoPagoPayerEmail: readEnv('MERCADO_PAGO_PAYER_EMAIL'),

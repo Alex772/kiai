@@ -2,6 +2,7 @@ import { MercadoPagoConfig, OAuth, Payment, Preference } from 'mercadopago';
 import { config } from './config.js';
 import { describeError } from './errors.js';
 import { getMercadoPagoConnection, saveMercadoPagoConnection, type MercadoPagoConnection } from './mpConnections.js';
+import { getCommissionPercent } from './platformSettings.js';
 import { ORDER_EXPIRATION_MINUTES, type Order } from './store.js';
 
 type PixPaymentResponse = {
@@ -54,22 +55,25 @@ function resolveRedirectUri(): string | undefined {
 
 // ── Resolução de credenciais por servidor (com fallback pro token global legado) ──────────────
 
+type ResolvedCredentials = { accessToken: string; isConnected: boolean };
+
 /**
  * Retorna o Access Token a usar para as chamadas desse servidor: a conta Mercado Pago que o
- * dono conectou via /conectarmercadopago (renovando sozinho se estiver perto de vencer), ou,
+ * dono conectou via /mercadopago conectar (renovando sozinho se estiver perto de vencer), ou,
  * se o servidor ainda não conectou nada, o MERCADO_PAGO_ACCESS_TOKEN global (comportamento
- * anterior, mantido por compatibilidade).
+ * anterior, mantido por compatibilidade). `isConnected` diz se é uma conta conectada (elegível
+ * pra split de comissão) ou o token global (não é — o dinheiro já é todo do dono do bot).
  */
-async function resolveAccessToken(guildId: string): Promise<string> {
+async function resolveAccessToken(guildId: string): Promise<ResolvedCredentials> {
   const connection = await getMercadoPagoConnection(guildId);
 
   if (!connection) {
     if (!config.mercadoPagoAccessToken) {
       throw new Error(
-        'Este servidor ainda não conectou uma conta Mercado Pago. Peça para o dono do servidor rodar /conectarmercadopago.'
+        'Este servidor ainda não conectou uma conta Mercado Pago. Peça para o dono do servidor rodar /mercadopago conectar.'
       );
     }
-    return config.mercadoPagoAccessToken;
+    return { accessToken: config.mercadoPagoAccessToken, isConnected: false };
   }
 
   const expiresInMs = new Date(connection.expiresAt).getTime() - Date.now();
@@ -78,18 +82,29 @@ async function resolveAccessToken(guildId: string): Promise<string> {
   if (expiresInMs <= oneDayMs) {
     try {
       const refreshed = await refreshConnection(connection);
-      return refreshed.accessToken;
+      return { accessToken: refreshed.accessToken, isConnected: true };
     } catch (error) {
       console.error(`Falha ao renovar automaticamente a conexão Mercado Pago do servidor ${guildId}:`, describeError(error));
       // Se ainda não venceu de fato, tenta usar o token atual mesmo assim; se já venceu, propaga o erro.
-      if (expiresInMs > 0) return connection.accessToken;
+      if (expiresInMs > 0) return { accessToken: connection.accessToken, isConnected: true };
       throw new Error(
-        'A conexão com o Mercado Pago deste servidor expirou e não foi possível renovar automaticamente. Peça para o dono rodar /conectarmercadopago de novo.'
+        'A conexão com o Mercado Pago deste servidor expirou e não foi possível renovar automaticamente. Peça para o dono rodar /mercadopago conectar de novo.'
       );
     }
   }
 
-  return connection.accessToken;
+  return { accessToken: connection.accessToken, isConnected: true };
+}
+
+/** Calcula o valor (em R$) da comissão da plataforma sobre um preço, arredondado a 2 casas. */
+async function calculatePlatformFee(price: number, isConnected: boolean): Promise<number | undefined> {
+  if (!isConnected) return undefined; // token global: dinheiro já é todo do dono do bot, sem split
+
+  const percent = await getCommissionPercent();
+  if (percent <= 0) return undefined;
+
+  const fee = Math.round(price * percent) / 100;
+  return fee > 0 ? fee : undefined;
 }
 
 function buildClients(accessToken: string) {
@@ -217,9 +232,10 @@ export async function refreshConnection(connection: MercadoPagoConnection): Prom
 export async function createPixPayment(order: Order) {
   if (!order.guildId) throw new Error('Pedido sem guildId — não é possível determinar as credenciais do Mercado Pago.');
 
-  const accessToken = await resolveAccessToken(order.guildId);
+  const { accessToken, isConnected } = await resolveAccessToken(order.guildId);
   const { payment: paymentClient } = buildClients(accessToken);
   const notificationUrl = resolveNotificationUrl();
+  const applicationFee = await calculatePlatformFee(order.product.price, isConnected);
 
   try {
     const response = (await paymentClient.create({
@@ -230,6 +246,7 @@ export async function createPixPayment(order: Order) {
         external_reference: order.id,
         notification_url: notificationUrl,
         date_of_expiration: new Date(Date.now() + ORDER_EXPIRATION_MINUTES * 60_000).toISOString(),
+        ...(applicationFee !== undefined ? { application_fee: applicationFee } : {}),
         payer: {
           email: resolvePayerEmail(order.userId),
           first_name: 'Cliente',
@@ -259,10 +276,11 @@ export async function createPixPayment(order: Order) {
 export async function createCardCheckoutLink(order: Order): Promise<{ checkoutUrl?: string }> {
   if (!order.guildId) throw new Error('Pedido sem guildId — não é possível determinar as credenciais do Mercado Pago.');
 
-  const accessToken = await resolveAccessToken(order.guildId);
+  const { accessToken, isConnected } = await resolveAccessToken(order.guildId);
   const { preference: preferenceClient } = buildClients(accessToken);
   const baseUrl = resolveBaseUrl();
   const notificationUrl = resolveNotificationUrl();
+  const marketplaceFee = await calculatePlatformFee(order.product.price, isConnected);
 
   try {
     const response = await preferenceClient.create({
@@ -279,6 +297,7 @@ export async function createCardCheckoutLink(order: Order): Promise<{ checkoutUr
         ],
         external_reference: order.id,
         notification_url: notificationUrl,
+        ...(marketplaceFee !== undefined ? { marketplace_fee: marketplaceFee } : {}),
         payment_methods: {
           excluded_payment_types: [{ id: 'ticket' }, { id: 'bank_transfer' }, { id: 'atm' }]
         },
@@ -307,7 +326,7 @@ export async function getPaymentDetails(
   guildId: string
 ): Promise<{ status?: string; externalReference?: string }> {
   try {
-    const accessToken = await resolveAccessToken(guildId);
+    const { accessToken } = await resolveAccessToken(guildId);
     const { payment: paymentClient } = buildClients(accessToken);
     const response = await paymentClient.get({ id: paymentId });
     return { status: response.status, externalReference: response.external_reference ?? undefined };
@@ -327,7 +346,7 @@ export async function searchPaymentByExternalReference(
   guildId: string
 ): Promise<{ id: string; status?: string } | undefined> {
   try {
-    const accessToken = await resolveAccessToken(guildId);
+    const { accessToken } = await resolveAccessToken(guildId);
     const { payment: paymentClient } = buildClients(accessToken);
     const response = await paymentClient.search({ options: { external_reference: orderId, sort: 'date_created', criteria: 'desc' } });
     const first = response.results?.[0];

@@ -6,6 +6,7 @@ import { handleLojaConfig, handleLogs, handlePermissoes } from './commands/confi
 import { handleMercadoPago } from './commands/mercadoPagoCommands.js';
 import { handleMeusBeneficios, handlePedido, handlePedidos, handleUsuario } from './commands/orderCommands.js';
 import { handleAddProduto, handleEditarProduto, handleRemoverProduto } from './commands/productCommands.js';
+import { handleComissao } from './commands/platformCommands.js';
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -50,6 +51,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       case 'mercadopago':
         await handleMercadoPago(interaction);
+        return;
+      case 'comissao':
+        await handleComissao(interaction);
         return;
     }
   } catch (error) {

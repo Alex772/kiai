@@ -116,5 +116,17 @@ export const commands = [
     .setDescription('Gerencia a conexão da conta Mercado Pago deste servidor. (Apenas dono do servidor)')
     .addSubcommand((sub) => sub.setName('conectar').setDescription('Gera o link para conectar a conta Mercado Pago deste servidor'))
     .addSubcommand((sub) => sub.setName('status').setDescription('Mostra o status da conexão Mercado Pago deste servidor'))
-    .addSubcommand((sub) => sub.setName('desconectar').setDescription('Desconecta a conta Mercado Pago deste servidor'))
+    .addSubcommand((sub) => sub.setName('desconectar').setDescription('Desconecta a conta Mercado Pago deste servidor')),
+
+  new SlashCommandBuilder()
+    .setName('comissao')
+    .setDescription('Define a taxa de comissão da plataforma (só o dono do bot).')
+    .addNumberOption((o) =>
+      o
+        .setName('percentual')
+        .setDescription('Percentual sobre vendas de servidores conectados (0-90). Sem isso, só mostra a taxa atual.')
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(90)
+    )
 ].map((command) => command.toJSON());

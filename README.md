@@ -17,6 +17,7 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
 - `/logs`: define os canais de log da loja (veja a seção "Logs" abaixo). Sem argumentos, mostra a configuração atual.
 - `/mercadopago conectar|status|desconectar` (dono do servidor): conecta a conta Mercado Pago própria deste servidor (veja a seção "Loja separada por servidor" abaixo).
+- `/comissao` (dono do bot, via `BOT_OWNER_ID`): define a taxa de comissão cobrada sobre vendas de servidores conectados.
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago, confirma a assinatura, e libera a entrega (cargo + DM) quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
@@ -133,9 +134,15 @@ Use `/mercadopago conectar` (dono do servidor) para vincular a conta Mercado Pag
 - Um servidor que ainda não conectou nenhuma conta usa automaticamente o `MERCADO_PAGO_ACCESS_TOKEN` global do bot (comportamento anterior, mantido por compatibilidade) — ou fica sem processar pagamentos, se essa variável também não estiver configurada.
 - O link de conexão usa um `state` de uso único e validade de 10 minutos (proteção contra CSRF) — ninguém consegue interceptar ou reaproveitar o link de outro servidor.
 
-### O que ainda falta (fase 3, não implementada)
+### Comissão da plataforma (split de pagamento)
 
-Comissão automática por venda (split de pagamento) usando `marketplace_fee`/`application_fee` do Mercado Pago — hoje, mesmo com contas conectadas por servidor, 100% do valor vai para a conta conectada. A divisão automática é a próxima etapa planejada.
+Toda venda de um servidor conectado via `/mercadopago conectar` pode gerar uma comissão automática pra quem administra o bot — usando o split de pagamento nativo do Mercado Pago (`application_fee` no PIX, `marketplace_fee` no cartão). O dinheiro já sai dividido na aprovação, sem precisar de nenhuma transferência manual depois.
+
+- `/comissao` (só quem administra o bot, definido em `BOT_OWNER_ID`) — define o percentual global (0 a 90%), igual pra todos os servidores. Sem argumentos, mostra a taxa atual.
+- A taxa só se aplica a servidores **conectados via OAuth**. Servidores ainda usando o `MERCADO_PAGO_ACCESS_TOKEN` global não geram comissão — o dinheiro já é todo do dono do bot nesse caso.
+- Mudar a taxa vale só pra vendas novas a partir dali; pedidos já criados não são afetados.
+
+Configure `BOT_OWNER_ID` no Railway com o seu ID de usuário do Discord (não é o mesmo que `ADMIN_ROLE_ID`, que é um cargo por servidor — esse aqui é pessoal e vale em qualquer servidor onde o bot estiver).
 
 ## Posição/ordem dos produtos
 

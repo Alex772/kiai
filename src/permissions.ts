@@ -16,6 +16,11 @@ export async function replyError(interaction: ChatInputCommandInteraction | Butt
   }
 }
 
+/** Dono do bot em si (não de um servidor específico) — controla configurações globais, como a comissão da plataforma. */
+export function isBotOwner(interaction: ChatInputCommandInteraction): boolean {
+  return Boolean(config.botOwnerId) && interaction.user.id === config.botOwnerId;
+}
+
 export function isGuildOwner(interaction: ChatInputCommandInteraction): boolean {
   if (interaction.guild?.ownerId === interaction.user.id) return true;
   if (config.adminRoleId && interaction.inCachedGuild()) {

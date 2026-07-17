@@ -249,6 +249,13 @@ export async function migrate() {
     `);
     await client.query('CREATE INDEX IF NOT EXISTS guild_mp_connections_mp_user_id_idx ON guild_mp_connections (mp_user_id);');
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
