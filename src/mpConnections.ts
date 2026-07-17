@@ -93,3 +93,10 @@ export async function listConnectionsExpiringSoon(daysThreshold: number): Promis
   );
   return rows.map(mapRow);
 }
+
+/** Lista todas as conexões ativas (todos os servidores). Usado como último recurso pelo webhook,
+ * quando não dá pra descobrir de qual servidor é um pagamento por nenhum outro meio. */
+export async function listAllConnections(): Promise<MercadoPagoConnection[]> {
+  const rows = await query<ConnectionRow>('SELECT * FROM guild_mp_connections');
+  return rows.map(mapRow);
+}

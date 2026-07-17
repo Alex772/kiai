@@ -16,7 +16,10 @@ type VerifyParams = {
  * Manifesto assinado: "id:<data.id em minúsculas>;request-id:<x-request-id>;ts:<ts>;"
  */
 export function verifyMercadoPagoSignature({ xSignature, xRequestId, dataId, secret }: VerifyParams): boolean {
-  if (!xSignature) return false;
+  if (!xSignature) {
+    console.warn('[webhook-signature] header x-signature ausente na requisição.');
+    return false;
+  }
 
   let ts: string | undefined;
   let hash: string | undefined;
@@ -30,7 +33,10 @@ export function verifyMercadoPagoSignature({ xSignature, xRequestId, dataId, sec
     if (key === 'v1') hash = value;
   }
 
-  if (!ts || !hash) return false;
+  if (!ts || !hash) {
+    console.warn(`[webhook-signature] não consegui extrair ts/v1 do header x-signature recebido: "${xSignature}"`);
+    return false;
+  }
 
   const manifestParts: string[] = [];
   if (dataId) manifestParts.push(`id:${dataId.toLowerCase()}`);
@@ -44,8 +50,21 @@ export function verifyMercadoPagoSignature({ xSignature, xRequestId, dataId, sec
   const receivedBuffer = Buffer.from(hash, 'hex');
 
   if (expectedBuffer.length === 0 || expectedBuffer.length !== receivedBuffer.length) {
+    console.warn(
+      `[webhook-signature] tamanho do hash não bate (esperado ${expectedBuffer.length} bytes, recebido ${receivedBuffer.length} bytes). ` +
+        `manifest="${manifest}" dataId="${dataId ?? '(ausente)'}" xRequestId="${xRequestId ?? '(ausente)'}" hash_recebido="${hash}"`
+    );
     return false;
   }
 
-  return timingSafeEqual(expectedBuffer, receivedBuffer);
+  const isValid = timingSafeEqual(expectedBuffer, receivedBuffer);
+
+  if (!isValid) {
+    console.warn(
+      `[webhook-signature] hash não confere. manifest="${manifest}" dataId="${dataId ?? '(ausente)'}" ` +
+        `xRequestId="${xRequestId ?? '(ausente)'}" hash_esperado="${expectedHex}" hash_recebido="${hash}"`
+    );
+  }
+
+  return isValid;
 }

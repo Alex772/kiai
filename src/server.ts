@@ -4,7 +4,7 @@ import type { Client } from 'discord.js';
 import { config } from './config.js';
 import { deliverOrder } from './delivery.js';
 import { exchangeAuthorizationCode, getPaymentDetails } from './mercadoPago.js';
-import { findConnectionByMpUserId } from './mpConnections.js';
+import { findConnectionByMpUserId, listAllConnections } from './mpConnections.js';
 import { findOrderByPaymentId, getOrder, updateOrder } from './store.js';
 import { verifyMercadoPagoSignature } from './webhookSecurity.js';
 
@@ -127,6 +127,8 @@ export function startHttpServer(
         const dataIdFromQuery = url.searchParams.get('data.id') ?? undefined;
 
         if (config.mercadoPagoWebhookSecret) {
+          console.log(`[webhook] URL recebida: ${url.pathname}${url.search} (data.id na query: ${dataIdFromQuery ?? '(nenhum)'})`);
+
           const isValid = verifyMercadoPagoSignature({
             xSignature: request.headers['x-signature'] as string | undefined,
             xRequestId: request.headers['x-request-id'] as string | undefined,
@@ -174,9 +176,7 @@ export function startHttpServer(
             guildIdForLookup = config.discordGuildId;
           }
 
-          if (!guildIdForLookup) {
-            console.warn(`Webhook do Mercado Pago recebido, mas não foi possível determinar o servidor (payment_id=${paymentId}).`);
-          } else {
+          if (guildIdForLookup) {
             const details = await getPaymentDetails(paymentId, guildIdForLookup);
 
             // Busca primeiro pelo external_reference (= ID do nosso pedido) — funciona tanto para
@@ -190,6 +190,34 @@ export function startHttpServer(
             } else if (order && !order.paymentId) {
               // Guarda o paymentId assim que descobrimos (útil para /pedido e a verificação automática).
               await updateOrder(order.id, { paymentId });
+            }
+          } else {
+            // Nenhuma pista de qual servidor é esse pagamento (típico de cartão numa conta que
+            // acabou de conectar). Último recurso: tenta cada conta conectada até uma reconhecer
+            // esse paymentId como seu. Caro (uma chamada por conta), mas só acontece nesse caso raro
+            // — e a verificação automática periódica ainda pegaria isso de qualquer forma depois.
+            const connections = await listAllConnections();
+            let resolved = false;
+
+            for (const connection of connections) {
+              const details = await getPaymentDetails(paymentId, connection.guildId);
+              if (!details.status && !details.externalReference) continue; // não pertence a essa conta
+
+              resolved = true;
+              const order =
+                (details.externalReference && (await getOrder(details.externalReference))) || (await findOrderByPaymentId(paymentId));
+
+              if (order && details.status === 'approved' && order.status !== 'approved') {
+                const updated = await updateOrder(order.id, { status: 'approved', paymentId });
+                await deliverOrder(client, updated ?? order);
+              } else if (order && !order.paymentId) {
+                await updateOrder(order.id, { paymentId });
+              }
+              break;
+            }
+
+            if (!resolved) {
+              console.warn(`Webhook do Mercado Pago recebido, mas não foi possível determinar o servidor (payment_id=${paymentId}).`);
             }
           }
         }
