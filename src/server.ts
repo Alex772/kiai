@@ -124,7 +124,10 @@ export function startHttpServer(
         }
 
         const url = new URL(request.url, 'http://internal');
-        const dataIdFromQuery = url.searchParams.get('data.id') ?? undefined;
+        // O Mercado Pago manda notificações em dois formatos pro mesmo evento: o novo ("Webhooks v2",
+        // com ?data.id=X&type=payment) e o legado ("IPN", com ?id=X&topic=payment). O ID do pagamento
+        // pode vir em qualquer um dos dois nomes de parâmetro.
+        const dataIdFromQuery = url.searchParams.get('data.id') ?? url.searchParams.get('id') ?? undefined;
 
         if (config.mercadoPagoWebhookSecret) {
           console.log(`[webhook] URL recebida: ${url.pathname}${url.search} (data.id na query: ${dataIdFromQuery ?? '(nenhum)'})`);
@@ -149,7 +152,10 @@ export function startHttpServer(
         }
 
         const body = await readJsonBody(request);
-        const paymentId = String(body.data && typeof body.data === 'object' ? (body.data as { id?: unknown }).id : body.id);
+        const paymentIdFromBody = String(
+          body.data && typeof body.data === 'object' ? (body.data as { id?: unknown }).id : body.id
+        );
+        const paymentId = dataIdFromQuery ?? (paymentIdFromBody !== 'undefined' ? paymentIdFromBody : undefined);
 
         if (paymentId && paymentId !== 'undefined') {
           // O Mercado Pago manda o user_id (dono da conta que recebeu o pagamento) no corpo do
