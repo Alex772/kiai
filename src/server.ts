@@ -2,10 +2,10 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { Client } from 'discord.js';
 import { config } from './config.js';
-import { deliverOrder } from './delivery.js';
+import { deliverOrder, revokeOrder } from './delivery.js';
 import { exchangeAuthorizationCode, getPaymentDetails } from './mercadoPago.js';
 import { findConnectionByMpUserId, listAllConnections } from './mpConnections.js';
-import { findOrderByPaymentId, getOrder, updateOrder } from './store.js';
+import { findOrderByPaymentId, getOrder, updateOrder, type Order } from './store.js';
 import { verifyMercadoPagoSignature } from './webhookSecurity.js';
 
 // Guarda temporariamente qual servidor/usuário iniciou uma conexão OAuth, indexado pelo "state"
@@ -31,6 +31,29 @@ function consumePendingOAuthState(state: string) {
   pendingOAuthStates.delete(state);
   if (entry.expiresAt < Date.now()) return undefined;
   return entry;
+}
+
+/**
+ * Aplica o status atual de um pagamento ao nosso pedido: libera a entrega se acabou de ser
+ * aprovado, revoga o cargo se foi reembolsado ou contestado depois de já aprovado, ou só guarda
+ * o paymentId se ainda não sabíamos.
+ */
+async function applyPaymentStatus(client: Client, order: Order, status: string | undefined, paymentId: string) {
+  if (status === 'approved' && order.status !== 'approved') {
+    const updated = await updateOrder(order.id, { status: 'approved', paymentId });
+    await deliverOrder(client, updated ?? order);
+    return;
+  }
+
+  if ((status === 'refunded' || status === 'charged_back') && order.status === 'approved') {
+    await revokeOrder(client, order, status);
+    return;
+  }
+
+  if (!order.paymentId) {
+    // Guarda o paymentId assim que descobrimos (útil para /pedido e a verificação automática).
+    await updateOrder(order.id, { paymentId });
+  }
 }
 
 type RuntimeStatus = {
@@ -190,12 +213,8 @@ export function startHttpServer(
             const order =
               (details.externalReference && (await getOrder(details.externalReference))) || (await findOrderByPaymentId(paymentId));
 
-            if (order && details.status === 'approved' && order.status !== 'approved') {
-              const updated = await updateOrder(order.id, { status: 'approved', paymentId });
-              await deliverOrder(client, updated ?? order);
-            } else if (order && !order.paymentId) {
-              // Guarda o paymentId assim que descobrimos (útil para /pedido e a verificação automática).
-              await updateOrder(order.id, { paymentId });
+            if (order) {
+              await applyPaymentStatus(client, order, details.status, paymentId);
             }
           } else {
             // Nenhuma pista de qual servidor é esse pagamento (típico de cartão numa conta que
@@ -213,11 +232,8 @@ export function startHttpServer(
               const order =
                 (details.externalReference && (await getOrder(details.externalReference))) || (await findOrderByPaymentId(paymentId));
 
-              if (order && details.status === 'approved' && order.status !== 'approved') {
-                const updated = await updateOrder(order.id, { status: 'approved', paymentId });
-                await deliverOrder(client, updated ?? order);
-              } else if (order && !order.paymentId) {
-                await updateOrder(order.id, { paymentId });
+              if (order) {
+                await applyPaymentStatus(client, order, details.status, paymentId);
               }
               break;
             }

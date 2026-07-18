@@ -238,6 +238,19 @@ https://seu-projeto.up.railway.app/webhooks/mercado-pago
 - **Comandos administrativos restritos:** `/addproduto`, `/editarproduto` e `/removerproduto` exigem o cargo moderador ou admin (ou dono do servidor); `/lojaconfig` exige o cargo admin (ou dono do servidor); `/permissoes` — que decide quem tem esses cargos — só pode ser usado pelo dono do servidor, propositalmente, pra ninguém conseguir se auto-promover.
 - **Pedidos isolados por usuário:** `/pedido` e `/pedidos` só mostram pedidos do próprio usuário que executou o comando.
 
+## Reembolso e chargeback
+
+Se um pagamento já aprovado for reembolsado ou contestado (chargeback) no Mercado Pago, o bot reage automaticamente:
+
+- Remove o cargo de entrega do comprador (se ele tinha um).
+- Avisa o comprador por DM.
+- Registra nos dois canais de log (vendas e admin) — o log admin mostra se a remoção do cargo deu certo ou não.
+- O pedido muda de status para "Reembolsado" ou "Contestado (chargeback)", visível em `/pedido`, `/pedidos` e `/usuario`.
+
+Isso é detectado de duas formas, iguais ao resto do sistema: **instantaneamente pelo webhook** quando o Mercado Pago avisa, e como **backup**, uma verificação a cada 15 minutos que confere todo pedido aprovado que ainda tem um cargo ativo — então mesmo que o webhook falhe, o cargo não fica "esquecido" com uma pessoa que teve o dinheiro devolvido.
+
+Não é retroativo: só pedidos aprovados a partir de agora são monitorados dessa forma (pedidos já reembolsados antes dessa atualização não são detectados automaticamente).
+
 ## Expiração automática de pedidos
 
 Pedidos que ficam **pendentes por mais de 1 hora sem pagamento** são cancelados automaticamente:

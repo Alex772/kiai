@@ -2,7 +2,7 @@ import { query } from './db.js';
 import type { Duration } from './duration.js';
 import type { Product } from './products.js';
 
-export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'refunded' | 'charged_back';
 export type PaymentMethod = 'pix' | 'card';
 
 /** Tempo (em minutos) que um pedido pode ficar pendente sem pagamento antes de expirar automaticamente. */
@@ -202,6 +202,22 @@ export async function listExpiredRoleGrants(): Promise<Order[]> {
      WHERE status = 'approved' AND product_delivery_role_id IS NOT NULL
        AND role_expires_at IS NOT NULL AND role_expires_at <= now() AND role_removed_at IS NULL
      ORDER BY role_expires_at ASC`
+  );
+  return rows.map(mapRow);
+}
+
+/**
+ * Lista pedidos aprovados com cargo de entrega ainda ativo (não removido) e com paymentId
+ * conhecido. Usado pelo job que verifica reembolsos/chargebacks — precisa checar o status atual
+ * desses pagamentos periodicamente na API do Mercado Pago, já que a aprovação por si só não avisa
+ * quando um reembolso acontece depois.
+ */
+export async function listApprovedOrdersWithActiveRole(): Promise<Order[]> {
+  const rows = await query<OrderRow>(
+    `SELECT * FROM orders
+     WHERE status = 'approved' AND product_delivery_role_id IS NOT NULL
+       AND role_removed_at IS NULL AND payment_id IS NOT NULL
+     ORDER BY updated_at ASC`
   );
   return rows.map(mapRow);
 }

@@ -7,7 +7,9 @@ export const STATUS_LABEL: Record<Order['status'], string> = {
   pending: '⏳ Pendente',
   approved: '✅ Aprovado',
   rejected: '❌ Rejeitado',
-  cancelled: '🚫 Cancelado'
+  cancelled: '🚫 Cancelado',
+  refunded: '↩️ Reembolsado',
+  charged_back: '⚠️ Contestado (chargeback)'
 };
 
 export function formatDate(iso: string) {

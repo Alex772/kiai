@@ -1,5 +1,5 @@
 import { client } from './client.js';
-import { deliverOrder } from './delivery.js';
+import { deliverOrder, revokeOrder } from './delivery.js';
 import { migrate } from './db.js';
 import { formatPrice } from './format.js';
 import { logAdmin, logSale, LOG_COLOR } from './logging.js';
@@ -7,6 +7,7 @@ import { getPaymentDetails, refreshConnection, searchPaymentByExternalReference 
 import { listConnectionsExpiringSoon } from './mpConnections.js';
 import {
   cancelExpiredOrders,
+  listApprovedOrdersWithActiveRole,
   listExpiredRoleGrants,
   listPendingCardOrdersWithoutPayment,
   listPendingOrdersWithPayment,
@@ -216,10 +217,39 @@ async function renewExpiringMercadoPagoConnectionsJob() {
   }
 }
 
+/**
+ * Verificação de segurança pra reembolsos/chargebacks — backup caso o webhook do Mercado Pago não
+ * avise a tempo. Olha só pedidos aprovados que ainda têm um cargo ativo (não removido), já que é
+ * o único caso que exige ação nossa; pedidos sem cargo não precisam de verificação automática.
+ */
+async function checkForRefundsJob() {
+  try {
+    const active = await listApprovedOrdersWithActiveRole();
+
+    for (const order of active) {
+      if (!order.paymentId || !order.guildId) continue;
+
+      try {
+        const details = await getPaymentDetails(order.paymentId, order.guildId);
+
+        if (details.status === 'refunded' || details.status === 'charged_back') {
+          await revokeOrder(client, order, details.status);
+          console.log(`Pedido ${order.id} detectado como ${details.status} pela verificação automática — cargo revogado.`);
+        }
+      } catch (error) {
+        console.error(`Falha ao verificar reembolso do pedido ${order.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Falha ao rodar a verificação automática de reembolsos:', error);
+  }
+}
+
 const CLEANUP_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
 const PAYMENT_POLL_INTERVAL_MS = 2 * 60_000; // roda a cada 2 minutos
 const ROLE_EXPIRATION_INTERVAL_MS = 5 * 60_000; // roda a cada 5 minutos
 const CONNECTION_RENEWAL_INTERVAL_MS = 24 * 60 * 60_000; // roda 1x por dia
+const REFUND_CHECK_INTERVAL_MS = 15 * 60_000; // roda a cada 15 minutos
 
 /** Dispara todos os jobs periódicos do bot. Chamado uma vez, depois que o banco está pronto. */
 export async function scheduleJobs() {
@@ -233,4 +263,6 @@ export async function scheduleJobs() {
 
   await renewExpiringMercadoPagoConnectionsJob();
   setInterval(renewExpiringMercadoPagoConnectionsJob, CONNECTION_RENEWAL_INTERVAL_MS);
+
+  setInterval(checkForRefundsJob, REFUND_CHECK_INTERVAL_MS);
 }
