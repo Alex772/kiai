@@ -3,7 +3,7 @@
 Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usando Mercado Pago, preparado para hospedagem no Railway.
 
 ## Funcionalidades
-
+ 
 - `/loja`: mostra os produtos com paginação (botões Anterior/Próxima e um botão "Página X/Y" que abre um campo pra digitar a página desejada) e botão "Comprar" em cada um.
 - `/comprar`: mostra a escolha entre PIX e cartão de crédito/débito, depois cria o pedido e gera o pagamento na forma escolhida.
 - `/pedido`: consulta o status detalhado de um pedido (valor, ID do pagamento no Mercado Pago, cargo de entrega, datas).
