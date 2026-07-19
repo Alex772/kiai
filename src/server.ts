@@ -147,6 +147,18 @@ export function startHttpServer(
         }
 
         const url = new URL(request.url, 'http://internal');
+        const isLegacyIpnFormat = url.searchParams.has('topic') && !url.searchParams.has('type');
+
+        if (isLegacyIpnFormat) {
+          // O Mercado Pago manda cada evento em dois formatos: o novo ("Webhooks v2",
+          // ?data.id=X&type=payment — assina certinho com x-signature) e o legado ("IPN",
+          // ?id=X&topic=payment — nunca bate a assinatura, provavelmente não usa o mesmo esquema).
+          // Como o evento já chega pelo formato novo, ignoramos o legado sem processar nem logar erro.
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ received: true, ignored: 'legacy_ipn_format' }));
+          return;
+        }
+
         // O Mercado Pago manda notificações em dois formatos pro mesmo evento: o novo ("Webhooks v2",
         // com ?data.id=X&type=payment) e o legado ("IPN", com ?id=X&topic=payment). O ID do pagamento
         // pode vir em qualquer um dos dois nomes de parâmetro.

@@ -2,6 +2,7 @@ import { Events, type AutocompleteInteraction } from 'discord.js';
 import { client } from '../client.js';
 import { formatPrice } from '../format.js';
 import { STATUS_LABEL } from '../orderDisplay.js';
+import { listCommissionTiers } from '../platformSettings.js';
 import { listProducts } from '../products.js';
 import { listOrdersByUser } from '../store.js';
 
@@ -39,6 +40,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           name: `${o.product.name} — ${STATUS_LABEL[o.status]} — ${o.id.slice(0, 8)}`,
           value: o.id
         }));
+
+      await autocomplete.respond(choices);
+    }
+
+    if (autocomplete.commandName === 'taxas') {
+      const tiers = await listCommissionTiers();
+      const choices = tiers
+        .filter((t) => String(t.id).includes(focused) || String(t.maxAmount).includes(focused))
+        .slice(0, 25)
+        .map((t) => ({ name: `#${t.id} — até R$ ${t.maxAmount.toFixed(2)} → ${t.percent}%`, value: t.id }));
 
       await autocomplete.respond(choices);
     }

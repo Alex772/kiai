@@ -256,6 +256,16 @@ export async function migrate() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS commission_tiers (
+        id SERIAL PRIMARY KEY,
+        max_amount NUMERIC(10,2) NOT NULL UNIQUE,
+        percent NUMERIC(5,2) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

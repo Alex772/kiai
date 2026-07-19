@@ -17,7 +17,8 @@ Bot Discord para gerenciar uma loja com pagamentos em dinheiro real via PIX usan
 - `/permissoes`: define quais cargos podem administrar a loja (veja a seção "Permissões" abaixo). Sem argumentos, mostra a configuração atual.
 - `/logs`: define os canais de log da loja (veja a seção "Logs" abaixo). Sem argumentos, mostra a configuração atual.
 - `/mercadopago conectar|status|desconectar` (dono do servidor): conecta a conta Mercado Pago própria deste servidor (veja a seção "Loja separada por servidor" abaixo).
-- `/comissao` (dono do bot, via `BOT_OWNER_ID`): define a taxa de comissão cobrada sobre vendas de servidores conectados.
+- `/comissao` (dono do bot, via `BOT_OWNER_ID`): define a taxa de comissão padrão cobrada sobre vendas de servidores conectados.
+- `/taxas listar|criar|editar|remover`: faixas de comissão por valor de venda (`listar` também disponível pra admins de loja).
 - Webhook `POST /webhooks/mercado-pago`: recebe notificações do Mercado Pago, confirma a assinatura, e libera a entrega (cargo + DM) quando o pagamento for aprovado.
 - Healthcheck `GET /health` para Railway.
 - Registro automático dos comandos slash ao iniciar (`AUTO_REGISTER_COMMANDS=true` por padrão).
@@ -138,9 +139,15 @@ Use `/mercadopago conectar` (dono do servidor) para vincular a conta Mercado Pag
 
 Toda venda de um servidor conectado via `/mercadopago conectar` pode gerar uma comissão automática pra quem administra o bot — usando o split de pagamento nativo do Mercado Pago (`application_fee` no PIX, `marketplace_fee` no cartão). O dinheiro já sai dividido na aprovação, sem precisar de nenhuma transferência manual depois.
 
-- `/comissao` (só quem administra o bot, definido em `BOT_OWNER_ID`) — define o percentual global (0 a 90%), igual pra todos os servidores. Sem argumentos, mostra a taxa atual.
-- A taxa só se aplica a servidores **conectados via OAuth**. Servidores ainda usando o `MERCADO_PAGO_ACCESS_TOKEN` global não geram comissão — o dinheiro já é todo do dono do bot nesse caso.
-- Mudar a taxa vale só pra vendas novas a partir dali; pedidos já criados não são afetados.
+- `/comissao` (só quem administra o bot, definido em `BOT_OWNER_ID`) — define o percentual **padrão** (0 a 90%), usado pra qualquer venda que não caia em nenhuma faixa específica. Sem argumentos, mostra a taxa atual.
+- `/taxas` — faixas de comissão por valor de venda, pra cobrar percentuais diferentes dependendo do preço (ex: vendas até R$1 pagam 50%, até R$5 pagam 20%, até R$100 pagam 10%, o resto usa a taxa padrão do `/comissao`):
+  - `/taxas listar` — mostra todas as faixas configuradas. Pode ser usado pelo dono do bot **ou** por quem administra a loja de cada servidor (dono do servidor ou cargo admin definido em `/permissoes`), pra eles saberem quanto vai ser descontado.
+  - `/taxas criar valor_maximo:<R$> percentual:<%>` — cria uma faixa nova. Só o dono do bot.
+  - `/taxas editar faixa:<#> valor_maximo:<opcional> percentual:<opcional>` — edita uma faixa existente (autocomplete mostra as faixas atuais). Só o dono do bot.
+  - `/taxas remover faixa:<#>` — remove uma faixa. Só o dono do bot.
+  - A faixa aplicada é sempre a **menor "até R$X"** que ainda cobre o valor da venda — então não precisa se preocupar com a ordem em que foram criadas.
+- A taxa (padrão ou por faixa) só se aplica a servidores **conectados via OAuth**. Servidores ainda usando o `MERCADO_PAGO_ACCESS_TOKEN` global não geram comissão — o dinheiro já é todo do dono do bot nesse caso.
+- Mudar qualquer taxa vale só pra vendas novas a partir dali; pedidos já criados não são afetados.
 
 Configure `BOT_OWNER_ID` no Railway com o seu ID de usuário do Discord (não é o mesmo que `ADMIN_ROLE_ID`, que é um cargo por servidor — esse aqui é pessoal e vale em qualquer servidor onde o bot estiver).
 

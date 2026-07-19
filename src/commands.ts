@@ -128,5 +128,37 @@ export const commands = [
         .setRequired(false)
         .setMinValue(0)
         .setMaxValue(90)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('taxas')
+    .setDescription('Gerencia faixas de comissão por valor de venda (ex: vendas até R$5 pagam 20%).')
+    .addSubcommand((sub) => sub.setName('listar').setDescription('Mostra todas as faixas de comissão configuradas'))
+    .addSubcommand((sub) =>
+      sub
+        .setName('criar')
+        .setDescription('Cria uma nova faixa de comissão. (Só dono do bot)')
+        .addNumberOption((o) =>
+          o.setName('valor_maximo').setDescription('Faixa vale pra vendas até esse valor em R$').setRequired(true).setMinValue(0.01)
+        )
+        .addNumberOption((o) =>
+          o.setName('percentual').setDescription('Percentual cobrado nessa faixa (0-90)').setRequired(true).setMinValue(0).setMaxValue(90)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('editar')
+        .setDescription('Edita uma faixa de comissão existente. (Só dono do bot)')
+        .addIntegerOption((o) => o.setName('faixa').setDescription('Faixa a editar').setRequired(true).setAutocomplete(true))
+        .addNumberOption((o) => o.setName('valor_maximo').setDescription('Novo valor máximo em R$ (opcional)').setRequired(false).setMinValue(0.01))
+        .addNumberOption((o) =>
+          o.setName('percentual').setDescription('Novo percentual (opcional, 0-90)').setRequired(false).setMinValue(0).setMaxValue(90)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('remover')
+        .setDescription('Remove uma faixa de comissão. (Só dono do bot)')
+        .addIntegerOption((o) => o.setName('faixa').setDescription('Faixa a remover').setRequired(true).setAutocomplete(true))
     )
 ].map((command) => command.toJSON());

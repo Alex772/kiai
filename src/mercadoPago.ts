@@ -2,7 +2,7 @@ import { MercadoPagoConfig, OAuth, Payment, Preference } from 'mercadopago';
 import { config } from './config.js';
 import { describeError } from './errors.js';
 import { getMercadoPagoConnection, saveMercadoPagoConnection, type MercadoPagoConnection } from './mpConnections.js';
-import { getCommissionPercent } from './platformSettings.js';
+import { resolveCommissionPercent } from './platformSettings.js';
 import { ORDER_EXPIRATION_MINUTES, type Order } from './store.js';
 
 type PixPaymentResponse = {
@@ -100,7 +100,7 @@ async function resolveAccessToken(guildId: string): Promise<ResolvedCredentials>
 async function calculatePlatformFee(price: number, isConnected: boolean): Promise<number | undefined> {
   if (!isConnected) return undefined; // token global: dinheiro já é todo do dono do bot, sem split
 
-  const percent = await getCommissionPercent();
+  const percent = await resolveCommissionPercent(price);
   if (percent <= 0) return undefined;
 
   const fee = Math.round(price * percent) / 100;
